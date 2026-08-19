@@ -98,12 +98,13 @@ class LoginTask(BaseTask):
             password_y
         )
 
-    def select_all(self):
-        pydirectinput.keyDown("ctrl")
-        time.sleep(0.03)
-        pydirectinput.press("a")
-        time.sleep(0.03)
-        pydirectinput.keyUp("ctrl")
+    def clear_field(self):
+        # Avoid Ctrl+A because this launcher can type the letter A literally.
+        # Home moves to the beginning, then Delete clears any existing text.
+        pydirectinput.press("home")
+        time.sleep(0.05)
+        pydirectinput.press("delete", presses=40, interval=0.01)
+        time.sleep(0.05)
 
     def start(self):
 
@@ -135,35 +136,17 @@ class LoginTask(BaseTask):
                     password_y
                 ) = positions
 
-                pydirectinput.click(
-                    username_x,
-                    username_y
-                )
+                pydirectinput.click(username_x, username_y)
+                time.sleep(0.15)
+                self.clear_field()
+                pydirectinput.write(username, interval=0.04)
 
                 time.sleep(0.15)
 
-                self.select_all()
-
-                pydirectinput.write(
-                    username,
-                    interval=0.04
-                )
-
+                pydirectinput.click(password_x, password_y)
                 time.sleep(0.15)
-
-                pydirectinput.click(
-                    password_x,
-                    password_y
-                )
-
-                time.sleep(0.15)
-
-                self.select_all()
-
-                pydirectinput.write(
-                    password,
-                    interval=0.04
-                )
+                self.clear_field()
+                pydirectinput.write(password, interval=0.04)
 
                 print("Login credentials entered")
 

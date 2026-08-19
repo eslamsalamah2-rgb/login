@@ -85,8 +85,6 @@ class LoginTask(BaseTask):
         left = max_location[0]
         top = max_location[1]
 
-        # الصورة المرجعية 154x58 تقريبًا.
-        # نضغط داخل مركز الخانة الأولى ثم الثانية بالنسبة للصورة المكتشفة.
         username_x = left + int(template_w * 0.43)
         username_y = top + int(template_h * 0.25)
 
@@ -99,6 +97,13 @@ class LoginTask(BaseTask):
             password_x,
             password_y
         )
+
+    def select_all(self):
+        pydirectinput.keyDown("ctrl")
+        time.sleep(0.03)
+        pydirectinput.press("a")
+        time.sleep(0.03)
+        pydirectinput.keyUp("ctrl")
 
     def start(self):
 
@@ -137,10 +142,7 @@ class LoginTask(BaseTask):
 
                 time.sleep(0.15)
 
-                pydirectinput.hotkey(
-                    "ctrl",
-                    "a"
-                )
+                self.select_all()
 
                 pydirectinput.write(
                     username,
@@ -156,10 +158,7 @@ class LoginTask(BaseTask):
 
                 time.sleep(0.15)
 
-                pydirectinput.hotkey(
-                    "ctrl",
-                    "a"
-                )
+                self.select_all()
 
                 pydirectinput.write(
                     password,

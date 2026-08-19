@@ -6,6 +6,7 @@ import json
 import os
 
 from launcher import Launcher
+from tasks.start_game_task import StartGameTask
 from config import (
     CONFIG_FILE,
     WINDOW_TITLE,
@@ -30,6 +31,7 @@ class SimpleLauncher:
         self.app.resizable(False, False)
 
         self.launcher = Launcher()
+        self.start_game_task = StartGameTask()
 
         self.build_ui()
         self.load_settings()
@@ -184,12 +186,31 @@ class SimpleLauncher:
             message
         )
 
-    def stop_selected(self):
-
-        success, message = self.launcher.stop()
+        if not success:
+            return
 
         self.set_status(
-            message
+            "جاري البحث عن Start Game..."
+        )
+
+        found = self.start_game_task.start()
+
+        if found:
+            self.set_status(
+                "تم الضغط على Start Game"
+            )
+        else:
+            self.set_status(
+                "لم يتم العثور على Start Game"
+            )
+
+    def stop_selected(self):
+
+        self.start_game_task.stop()
+        self.launcher.stop()
+
+        self.set_status(
+            "تم الإيقاف"
         )
 
     def save_settings(self):
@@ -253,23 +274,16 @@ class SimpleLauncher:
         except Exception:
             pass
 
-    def set_status(
-        self,
-        text
-    ):
+    def set_status(self, text):
 
         self.app.after(
             0,
-            lambda:
-            self.status_label.configure(
+            lambda: self.status_label.configure(
                 text=text
             )
         )
 
-    def run_in_thread(
-        self,
-        function
-    ):
+    def run_in_thread(self, function):
 
         threading.Thread(
             target=function,

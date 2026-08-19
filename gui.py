@@ -7,6 +7,7 @@ import os
 
 from launcher import Launcher
 from tasks.start_game_task import StartGameTask
+from tasks.login_task import LoginTask
 from config import (
     CONFIG_FILE,
     WINDOW_TITLE,
@@ -32,6 +33,7 @@ class SimpleLauncher:
 
         self.launcher = Launcher()
         self.start_game_task = StartGameTask()
+        self.login_task = LoginTask()
 
         self.build_ui()
         self.load_settings()
@@ -195,18 +197,31 @@ class SimpleLauncher:
 
         found = self.start_game_task.start()
 
-        if found:
+        if not found:
             self.set_status(
-                "تم الضغط على Start Game"
+                "لم يتم العثور على Start Game"
+            )
+            return
+
+        self.set_status(
+            "تم الضغط على Start Game - جاري انتظار خانات الدخول..."
+        )
+
+        login_done = self.login_task.start()
+
+        if login_done:
+            self.set_status(
+                "تم إدخال بيانات الدخول"
             )
         else:
             self.set_status(
-                "لم يتم العثور على Start Game"
+                "لم يتم العثور على خانات الدخول أو بيانات الدخول غير موجودة"
             )
 
     def stop_selected(self):
 
         self.start_game_task.stop()
+        self.login_task.stop()
         self.launcher.stop()
 
         self.set_status(

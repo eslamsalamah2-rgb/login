@@ -99,12 +99,11 @@ class LoginTask(BaseTask):
         )
 
     def clear_username_field(self):
-        # Move to the end of any existing username and erase it character by character.
-        # Clearing the username field also clears the password field in this launcher.
-        pydirectinput.press("end")
-        time.sleep(0.05)
-        pydirectinput.press("backspace", presses=40, interval=0.02)
-        time.sleep(0.05)
+        # The click in the username field places the cursor at the end.
+        # Erase any existing username one character at a time.
+        for _ in range(40):
+            pydirectinput.press("backspace")
+            time.sleep(0.02)
 
     def start(self):
 
@@ -136,7 +135,7 @@ class LoginTask(BaseTask):
                     password_y
                 ) = positions
 
-                # Clear only the username field.
+                # Click and clear only the username field.
                 pydirectinput.click(username_x, username_y)
                 time.sleep(0.15)
                 self.clear_username_field()
@@ -144,7 +143,7 @@ class LoginTask(BaseTask):
 
                 time.sleep(0.15)
 
-                # Password is already cleared automatically when username is cleared.
+                # Clearing username automatically clears the password field.
                 pydirectinput.click(password_x, password_y)
                 time.sleep(0.15)
                 pydirectinput.write(password, interval=0.04)

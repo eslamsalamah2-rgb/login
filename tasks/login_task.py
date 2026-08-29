@@ -85,7 +85,9 @@ class LoginTask(BaseTask):
         left = max_location[0]
         top = max_location[1]
 
-        username_x = left + int(template_w * 0.43)
+        # Click near the far-right side of the username field so the cursor
+        # is placed after the last character before Backspace starts.
+        username_x = left + int(template_w * 0.82)
         username_y = top + int(template_h * 0.25)
 
         password_x = left + int(template_w * 0.43)
@@ -99,7 +101,6 @@ class LoginTask(BaseTask):
         )
 
     def clear_username_field(self):
-        # The click in the username field places the cursor at the end.
         # Erase any existing username one character at a time.
         for _ in range(40):
             pydirectinput.press("backspace")
@@ -135,15 +136,19 @@ class LoginTask(BaseTask):
                     password_y
                 ) = positions
 
-                # Click and clear only the username field.
+                # Click near the right side of Username.
                 pydirectinput.click(username_x, username_y)
-                time.sleep(0.15)
+                time.sleep(0.20)
+
+                # Delete the old username from the end.
                 self.clear_username_field()
+                time.sleep(0.10)
+
+                # Type the new username.
                 pydirectinput.write(username, interval=0.04)
+                time.sleep(0.20)
 
-                time.sleep(0.15)
-
-                # Clearing username automatically clears the password field.
+                # Password is already cleared automatically when username is cleared.
                 pydirectinput.click(password_x, password_y)
                 time.sleep(0.15)
                 pydirectinput.write(password, interval=0.04)

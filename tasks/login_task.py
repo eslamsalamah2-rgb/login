@@ -98,12 +98,12 @@ class LoginTask(BaseTask):
             password_y
         )
 
-    def clear_field(self):
-        # Avoid Ctrl+A because this launcher can type the letter A literally.
-        # Home moves to the beginning, then Delete clears any existing text.
-        pydirectinput.press("home")
+    def clear_username_field(self):
+        # Move to the end of any existing username and erase it character by character.
+        # Clearing the username field also clears the password field in this launcher.
+        pydirectinput.press("end")
         time.sleep(0.05)
-        pydirectinput.press("delete", presses=40, interval=0.01)
+        pydirectinput.press("backspace", presses=40, interval=0.02)
         time.sleep(0.05)
 
     def start(self):
@@ -136,16 +136,17 @@ class LoginTask(BaseTask):
                     password_y
                 ) = positions
 
+                # Clear only the username field.
                 pydirectinput.click(username_x, username_y)
                 time.sleep(0.15)
-                self.clear_field()
+                self.clear_username_field()
                 pydirectinput.write(username, interval=0.04)
 
                 time.sleep(0.15)
 
+                # Password is already cleared automatically when username is cleared.
                 pydirectinput.click(password_x, password_y)
                 time.sleep(0.15)
-                self.clear_field()
                 pydirectinput.write(password, interval=0.04)
 
                 print("Login credentials entered")

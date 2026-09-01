@@ -4,11 +4,14 @@ import keyboard
 import threading
 import json
 import os
+import time
 
 from launcher import Launcher
+from account_manager import AccountManager
 from tasks.start_game_task import StartGameTask
 from tasks.login_task import LoginTask
 from tasks.login_button_task import LoginButtonTask
+from tasks.post_login_message_task import PostLoginMessageTask
 from config import (
     CONFIG_FILE,
     WINDOW_TITLE,
@@ -32,9 +35,13 @@ class SimpleLauncher:
         self.app.resizable(False, False)
 
         self.launcher = Launcher()
+        self.account_manager = AccountManager()
         self.start_game_task = StartGameTask()
         self.login_task = LoginTask()
         self.login_button_task = LoginButtonTask()
+        self.post_login_task = PostLoginMessageTask()
+
+        self.stop_requested = False
 
         self.build_ui()
         self.load_settings()
@@ -128,43 +135,186 @@ class SimpleLauncher:
         self.save_settings()
         self.set_status("تم اختيار الملف")
 
-    def open_selected(self):
+    def run_account(self, path, username, password, account_number, total_accounts):
 
-        path = self.path_entry.get().strip()
+        if self.stop_requested:
+            return "STOPPED"
+
+        self.set_status(
+            f"الحساب {account_number}/{total_accounts}: جاري فتح صفحة جديدة..."
+        )
 
         success, message = self.launcher.open(path)
-        self.set_status(message)
 
         if not success:
-            return
+            self.set_status(message)
+            return "OPEN_ERROR"
 
-        self.set_status("جاري البحث عن Start Game...")
+        self.set_status(
+            f"الحساب {account_number}/{total_accounts}: جاري البحث عن Start Game..."
+        )
+
         found = self.start_game_task.start()
 
-        if not found:
-            self.set_status("لم يتم العثور على Start Game")
-            return
+        if not found or self.stop_requested:
+            return "START_GAME_ERROR"
 
-        self.set_status("تم الضغط على Start Game - جاري انتظار خانات الدخول...")
-        login_done = self.login_task.start()
+        self.set_status(
+            f"الحساب {account_number}/{total_accounts}: جاري إدخال بيانات الدخول..."
+        )
 
-        if not login_done:
-            self.set_status("لم يتم العثور على خانات الدخول أو بيانات الدخول غير موجودة")
-            return
+        login_done = self.login_task.start(
+            username=username,
+            password=password
+        )
 
-        self.set_status("تم إدخال بيانات الدخول - جاري البحث عن زر Log In...")
+        if not login_done or self.stop_requested:
+            return "LOGIN_FIELDS_ERROR"
+
+        self.set_status(
+            f"الحساب {account_number}/{total_accounts}: جاري الضغط على Log In..."
+        )
+
         button_done = self.login_button_task.start()
 
-        if button_done:
-            self.set_status("تم الضغط على Log In")
+        if not button_done or self.stop_requested:
+            return "LOGIN_BUTTON_ERROR"
+
+        message_type = self.post_login_task.wait_for_message(
+            timeout=6.0
+        )
+
+        # Case 1: credentials are fine, server asks for another Log In.
+        if message_type == PostLoginMessageTask.DISCONNECTED:
+            self.set_status(
+                f"الحساب {account_number}/{total_accounts}: Disconnected - إعادة Log In..."
+            )
+
+            self.post_login_task.press_ok()
+            time.sleep(0.7)
+
+            if not self.login_button_task.start():
+                return "LOGIN_BUTTON_ERROR"
+
+            message_type = self.post_login_task.wait_for_message(
+                timeout=6.0
+            )
+
+        # Case 2: retry the saved password once. If Wrong Password appears
+        # again after an explicit rewrite, report PAGE_ERROR to the main flow.
+        if message_type == PostLoginMessageTask.WRONG_PASSWORD:
+            self.set_status(
+                f"الحساب {account_number}/{total_accounts}: مراجعة الباسورد..."
+            )
+
+            self.post_login_task.press_ok()
+            time.sleep(0.5)
+
+            password_done = self.login_task.rewrite_password(
+                password
+            )
+
+            if not password_done:
+                return "PASSWORD_RETRY_ERROR"
+
+            if not self.login_button_task.start():
+                return "LOGIN_BUTTON_ERROR"
+
+            second_message = self.post_login_task.wait_for_message(
+                timeout=6.0
+            )
+
+            if second_message == PostLoginMessageTask.WRONG_PASSWORD:
+                self.post_login_task.press_ok()
+                return "PAGE_ERROR"
+
+            if second_message == PostLoginMessageTask.DISCONNECTED:
+                self.post_login_task.press_ok()
+                time.sleep(0.7)
+                self.login_button_task.start()
+
+        return "SUCCESS"
+
+    def open_selected(self):
+
+        self.stop_requested = False
+        path = self.path_entry.get().strip()
+
+        accounts = self.account_manager.load_accounts()
+
+        # If accounts.json exists and has accounts, open one new page per account.
+        if accounts:
+            total_accounts = len(accounts)
+
+            for index, account in enumerate(accounts, start=1):
+                if self.stop_requested:
+                    self.set_status("تم الإيقاف")
+                    return
+
+                result = self.run_account(
+                    path=path,
+                    username=account["username"],
+                    password=account["password"],
+                    account_number=index,
+                    total_accounts=total_accounts
+                )
+
+                if result == "PAGE_ERROR":
+                    self.set_status(
+                        f"الحساب {index}: PAGE_ERROR - الصفحة تحتاج معالجة من البرنامج الرئيسي"
+                    )
+                    return
+
+                if result != "SUCCESS":
+                    self.set_status(
+                        f"الحساب {index}: فشل - {result}"
+                    )
+                    return
+
+                self.set_status(
+                    f"الحساب {index}/{total_accounts}: تم - الانتقال للحساب التالي..."
+                )
+
+                time.sleep(1.0)
+
+            self.set_status(
+                f"تم الانتهاء من {total_accounts} حساب"
+            )
+            return
+
+        # Backward-compatible single-account mode using credentials.json.
+        username, password = self.login_task.load_credentials()
+
+        if not username or not password:
+            self.set_status(
+                "لا يوجد accounts.json ولا بيانات صالحة في credentials.json"
+            )
+            return
+
+        result = self.run_account(
+            path=path,
+            username=username,
+            password=password,
+            account_number=1,
+            total_accounts=1
+        )
+
+        if result == "PAGE_ERROR":
+            self.set_status(
+                "PAGE_ERROR - الصفحة تحتاج معالجة من البرنامج الرئيسي"
+            )
+        elif result == "SUCCESS":
+            self.set_status("تم تسجيل الدخول")
         else:
-            self.set_status("لم يتم العثور على زر Log In")
+            self.set_status(f"فشل - {result}")
 
     def stop_selected(self):
 
+        self.stop_requested = True
         self.start_game_task.stop()
         self.login_task.stop()
         self.login_button_task.stop()
+        self.post_login_task.stop()
         self.launcher.stop()
 
         self.set_status("تم الإيقاف")

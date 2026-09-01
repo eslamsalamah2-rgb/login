@@ -101,8 +101,8 @@ class LoginTask(BaseTask):
         )
 
     def clear_username_field(self):
-        # Erase any existing username one character at a time.
-        for _ in range(40):
+        # Erase the old username from the end.
+        for _ in range(10):
             pydirectinput.press("backspace")
             time.sleep(0.02)
 

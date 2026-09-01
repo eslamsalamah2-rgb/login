@@ -85,35 +85,44 @@ class LoginTask(BaseTask):
         left = max_location[0]
         top = max_location[1]
 
-        # Click near the far-right side of the username field so the cursor
-        # is placed after the last character before Backspace starts.
+        # Far-right click point for clearing username from the end.
         username_x = left + int(template_w * 0.82)
         username_y = top + int(template_h * 0.25)
 
+        # Normal password typing point.
         password_x = left + int(template_w * 0.43)
         password_y = top + int(template_h * 0.76)
+
+        # Far-right password point used only when retrying a password.
+        password_clear_x = left + int(template_w * 0.82)
 
         return (
             username_x,
             username_y,
             password_x,
-            password_y
+            password_y,
+            password_clear_x
         )
 
     def clear_username_field(self):
-        # Erase the old username from the end.
         for _ in range(10):
             pydirectinput.press("backspace")
             time.sleep(0.02)
 
-    def start(self):
+    def clear_password_field(self):
+        for _ in range(20):
+            pydirectinput.press("backspace")
+            time.sleep(0.02)
+
+    def start(self, username=None, password=None):
 
         self.running = True
 
-        username, password = self.load_credentials()
+        if username is None or password is None:
+            username, password = self.load_credentials()
 
         if not username or not password:
-            print("credentials.json missing or incomplete")
+            print("Login credentials missing or incomplete")
             self.running = False
             return False
 
@@ -133,27 +142,24 @@ class LoginTask(BaseTask):
                     username_x,
                     username_y,
                     password_x,
-                    password_y
+                    password_y,
+                    _
                 ) = positions
 
-                # Click near the right side of Username.
                 pydirectinput.click(username_x, username_y)
                 time.sleep(0.20)
 
-                # Delete the old username from the end.
                 self.clear_username_field()
                 time.sleep(0.10)
 
-                # Type the new username.
                 pydirectinput.write(username, interval=0.04)
                 time.sleep(0.20)
 
-                # Password is already cleared automatically when username is cleared.
                 pydirectinput.click(password_x, password_y)
                 time.sleep(0.15)
                 pydirectinput.write(password, interval=0.04)
 
-                print("Login credentials entered")
+                print(f"Login credentials entered for {username}")
 
                 self.running = False
                 return True
@@ -161,6 +167,37 @@ class LoginTask(BaseTask):
             time.sleep(0.5)
 
         return False
+
+    def rewrite_password(self, password):
+        if not password:
+            return False
+
+        positions = self.find_login_fields()
+
+        if not positions:
+            return False
+
+        (
+            _,
+            _,
+            password_x,
+            password_y,
+            password_clear_x
+        ) = positions
+
+        # Click at the far-right side of the password field and clear it.
+        pydirectinput.click(password_clear_x, password_y)
+        time.sleep(0.15)
+        self.clear_password_field()
+        time.sleep(0.10)
+
+        # Type the password again from scratch.
+        pydirectinput.click(password_x, password_y)
+        time.sleep(0.10)
+        pydirectinput.write(password, interval=0.04)
+        time.sleep(0.15)
+
+        return True
 
     def stop(self):
         self.running = False

@@ -12,6 +12,7 @@ from tasks.start_game_task import StartGameTask
 from tasks.login_task import LoginTask
 from tasks.login_button_task import LoginButtonTask
 from tasks.post_login_message_task import PostLoginMessageTask
+from tasks.memory_reader import ConquerMemoryReader
 from config import (
     CONFIG_FILE,
     WINDOW_TITLE,
@@ -140,6 +141,9 @@ class SimpleLauncher:
         if self.stop_requested:
             return "STOPPED"
 
+        # Snapshot currently-open Conquer pages before opening this account.
+        previous_conquer_pids = ConquerMemoryReader.list_conquer_pids()
+
         self.set_status(
             f"الحساب {account_number}/{total_accounts}: جاري فتح صفحة جديدة..."
         )
@@ -159,6 +163,30 @@ class SimpleLauncher:
         if not found or self.stop_requested:
             return "START_GAME_ERROR"
 
+        # Start Game should create one new conquer.exe process.
+        self.set_status(
+            f"الحساب {account_number}/{total_accounts}: جاري تحديد PID الصفحة الجديدة..."
+        )
+
+        conquer_pid = ConquerMemoryReader.wait_for_new_conquer_pid(
+            previous_conquer_pids,
+            timeout=20.0
+        )
+
+        if conquer_pid is None:
+            return "CONQUER_PID_ERROR"
+
+        try:
+            memory_reader = ConquerMemoryReader(conquer_pid)
+        except Exception as error:
+            print(f"Could not open Conquer PID {conquer_pid}: {error}")
+            return "MEMORY_OPEN_ERROR"
+
+        initial_name = memory_reader.read_name() or ""
+        print(
+            f"Conquer PID {conquer_pid} initial name: {initial_name!r}"
+        )
+
         self.set_status(
             f"الحساب {account_number}/{total_accounts}: جاري إدخال بيانات الدخول..."
         )
@@ -169,6 +197,7 @@ class SimpleLauncher:
         )
 
         if not login_done or self.stop_requested:
+            memory_reader.close()
             return "LOGIN_FIELDS_ERROR"
 
         self.set_status(
@@ -178,6 +207,7 @@ class SimpleLauncher:
         button_done = self.login_button_task.start()
 
         if not button_done or self.stop_requested:
+            memory_reader.close()
             return "LOGIN_BUTTON_ERROR"
 
         message_type = self.post_login_task.wait_for_message(
@@ -194,6 +224,7 @@ class SimpleLauncher:
             time.sleep(0.7)
 
             if not self.login_button_task.start():
+                memory_reader.close()
                 return "LOGIN_BUTTON_ERROR"
 
             message_type = self.post_login_task.wait_for_message(
@@ -215,9 +246,11 @@ class SimpleLauncher:
             )
 
             if not password_done:
+                memory_reader.close()
                 return "PASSWORD_RETRY_ERROR"
 
             if not self.login_button_task.start():
+                memory_reader.close()
                 return "LOGIN_BUTTON_ERROR"
 
             second_message = self.post_login_task.wait_for_message(
@@ -226,12 +259,41 @@ class SimpleLauncher:
 
             if second_message == PostLoginMessageTask.WRONG_PASSWORD:
                 self.post_login_task.press_ok()
+                memory_reader.close()
                 return "PAGE_ERROR"
 
             if second_message == PostLoginMessageTask.DISCONNECTED:
                 self.post_login_task.press_ok()
                 time.sleep(0.7)
-                self.login_button_task.start()
+
+                if not self.login_button_task.start():
+                    memory_reader.close()
+                    return "LOGIN_BUTTON_ERROR"
+
+        # Final proof that this page actually entered the game:
+        # conquer.exe + 0x8E6184 must change to a non-empty character/page name.
+        self.set_status(
+            f"الحساب {account_number}/{total_accounts}: جاري التأكد من اسم الصفحة من الذاكرة..."
+        )
+
+        page_name = memory_reader.wait_for_name_change(
+            previous_value=initial_name,
+            timeout=20.0,
+            require_change=True
+        )
+
+        memory_reader.close()
+
+        if not page_name:
+            return "MEMORY_NAME_TIMEOUT"
+
+        print(
+            f"Account {account_number} ready - PID {conquer_pid} - Name: {page_name}"
+        )
+
+        self.set_status(
+            f"الحساب {account_number}/{total_accounts}: تم الدخول - {page_name}"
+        )
 
         return "SUCCESS"
 

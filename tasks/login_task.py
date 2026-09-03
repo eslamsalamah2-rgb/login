@@ -85,15 +85,12 @@ class LoginTask(BaseTask):
         left = max_location[0]
         top = max_location[1]
 
-        # Far-right click point for clearing username from the end.
         username_x = left + int(template_w * 0.82)
         username_y = top + int(template_h * 0.25)
 
-        # Normal password typing point.
         password_x = left + int(template_w * 0.43)
         password_y = top + int(template_h * 0.76)
 
-        # Far-right password point used only when retrying a password.
         password_clear_x = left + int(template_w * 0.82)
 
         return (
@@ -168,13 +165,23 @@ class LoginTask(BaseTask):
 
         return False
 
-    def rewrite_password(self, password):
+    def rewrite_password(self, password, timeout=5.0):
+        """After a password-error dialog is closed, rewrite password from zero."""
         if not password:
             return False
 
-        positions = self.find_login_fields()
+        start_time = time.time()
+        positions = None
+
+        # The login fields may need a moment to become visible again after OK.
+        while time.time() - start_time < timeout:
+            positions = self.find_login_fields()
+            if positions:
+                break
+            time.sleep(0.20)
 
         if not positions:
+            print("Password retry: login fields not found after OK")
             return False
 
         (
@@ -185,18 +192,21 @@ class LoginTask(BaseTask):
             password_clear_x
         ) = positions
 
-        # Click at the far-right side of the password field and clear it.
+        # Put the caret at the far-right end of the current password.
         pydirectinput.click(password_clear_x, password_y)
-        time.sleep(0.15)
+        time.sleep(0.20)
+
+        # Erase the current password completely.
         self.clear_password_field()
-        time.sleep(0.10)
-
-        # Type the password again from scratch.
-        pydirectinput.click(password_x, password_y)
-        time.sleep(0.10)
-        pydirectinput.write(password, interval=0.04)
         time.sleep(0.15)
 
+        # Click the normal password typing area and type it again from scratch.
+        pydirectinput.click(password_x, password_y)
+        time.sleep(0.15)
+        pydirectinput.write(password, interval=0.04)
+        time.sleep(0.20)
+
+        print("Password rewritten from scratch")
         return True
 
     def stop(self):

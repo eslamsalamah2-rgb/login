@@ -26,14 +26,56 @@ class AccountManager:
 
                 username = str(item.get("username", "")).strip()
                 password = str(item.get("password", ""))
+                character_name = str(
+                    item.get("character_name", item.get("name", ""))
+                ).strip()
 
                 if username and password:
                     accounts.append({
                         "username": username,
-                        "password": password
+                        "password": password,
+                        "character_name": character_name
                     })
 
             return accounts
 
-        except Exception:
+        except Exception as error:
+            print(f"Failed to load accounts: {error}")
             return []
+
+    def save_accounts(self, accounts):
+        try:
+            clean_accounts = []
+
+            for item in accounts:
+                if not isinstance(item, dict):
+                    continue
+
+                username = str(item.get("username", "")).strip()
+                password = str(item.get("password", ""))
+                character_name = str(
+                    item.get("character_name", "")
+                ).strip()
+
+                if not username or not password:
+                    continue
+
+                clean_accounts.append({
+                    "username": username,
+                    "password": password,
+                    "character_name": character_name
+                })
+
+            with open(self.path, "w", encoding="utf-8") as file:
+                json.dump(
+                    clean_accounts,
+                    file,
+                    ensure_ascii=False,
+                    indent=4
+                )
+
+            return True
+
+        except Exception as error:
+            print(f"Failed to save accounts: {error}")
+            return False

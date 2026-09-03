@@ -79,14 +79,31 @@ class ConquerMemoryReader:
     def wait_for_name_change(
         self,
         previous_value=None,
-        timeout=20.0,
-        require_change=True
+        timeout=None,
+        require_change=True,
+        check_interval=10.0
     ):
-        start_time = time.time()
-        previous_value = (previous_value or "").strip()
+        """Keep checking the character-name address until a valid name appears.
 
-        while time.time() - start_time < timeout:
+        The login/server can take a long time, so this intentionally does not
+        fail after a short timeout. It checks conquer.exe+8E6184 once every
+        ``check_interval`` seconds (10 seconds by default) until the value is
+        non-empty and, when requested, different from the initial value.
+
+        ``timeout`` is kept only for compatibility with older gui.py calls and
+        is intentionally ignored.
+        """
+        previous_value = (previous_value or "").strip()
+        check_number = 0
+
+        while True:
+            check_number += 1
             value = self.read_name()
+
+            print(
+                f"Memory name check #{check_number} - PID {self.pid} - "
+                f"Value: {value!r}"
+            )
 
             if value:
                 if not require_change:
@@ -95,6 +112,8 @@ class ConquerMemoryReader:
                 if value != previous_value:
                     return value
 
-            time.sleep(0.25)
-
-        return None
+            print(
+                f"Name not ready yet. Checking again in "
+                f"{check_interval:g} seconds..."
+            )
+            time.sleep(check_interval)

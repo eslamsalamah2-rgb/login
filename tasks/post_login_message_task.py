@@ -12,6 +12,7 @@ class PostLoginMessageTask(BaseTask):
 
     DISCONNECTED = "DISCONNECTED"
     WRONG_PASSWORD = "WRONG_PASSWORD"
+    INVALID_ACCOUNT_PASSWORD = "INVALID_ACCOUNT_PASSWORD"
 
     def __init__(self):
         super().__init__()
@@ -24,14 +25,32 @@ class PostLoginMessageTask(BaseTask):
             self.WRONG_PASSWORD: os.path.join(
                 "assets",
                 "wrong_password.png"
+            ),
+            self.INVALID_ACCOUNT_PASSWORD: os.path.join(
+                "assets",
+                "invalid_account_password.png"
             )
         }
 
+        self.ok_template_path = os.path.join(
+            "assets",
+            "ok_button.png"
+        )
+
         self.threshold = 0.82
+        self.ok_threshold = 0.82
+
+    def _load_screen(self):
+        screenshot = ImageGrab.grab()
+        screen = np.array(screenshot)
+        return cv2.cvtColor(
+            screen,
+            cv2.COLOR_RGB2BGR
+        )
 
     def _match_template(self, screen, template_path):
         if not os.path.exists(template_path):
-            return 0.0
+            return 0.0, None, None
 
         template = cv2.imread(
             template_path,
@@ -39,7 +58,13 @@ class PostLoginMessageTask(BaseTask):
         )
 
         if template is None:
-            return 0.0
+            return 0.0, None, None
+
+        screen_h, screen_w = screen.shape[:2]
+        template_h, template_w = template.shape[:2]
+
+        if template_w > screen_w or template_h > screen_h:
+            return 0.0, None, None
 
         result = cv2.matchTemplate(
             screen,
@@ -47,22 +72,23 @@ class PostLoginMessageTask(BaseTask):
             cv2.TM_CCOEFF_NORMED
         )
 
-        _, max_value, _, _ = cv2.minMaxLoc(result)
-        return max_value
+        _, max_value, _, max_location = cv2.minMaxLoc(result)
+
+        center = (
+            max_location[0] + template_w // 2,
+            max_location[1] + template_h // 2
+        )
+
+        return max_value, center, (template_w, template_h)
 
     def detect(self):
-        screenshot = ImageGrab.grab()
-        screen = np.array(screenshot)
-        screen = cv2.cvtColor(
-            screen,
-            cv2.COLOR_RGB2BGR
-        )
+        screen = self._load_screen()
 
         best_type = None
         best_value = 0.0
 
         for message_type, template_path in self.templates.items():
-            value = self._match_template(
+            value, _, _ = self._match_template(
                 screen,
                 template_path
             )
@@ -99,11 +125,45 @@ class PostLoginMessageTask(BaseTask):
 
         return None
 
-    def press_ok(self):
-        # These dialogs use OK as the default action.
-        # Enter avoids depending on a fixed screen coordinate.
+    def press_ok(self, timeout=3.0):
+        """Find the actual OK button image and click it.
+
+        This is used for every known post-login dialog so we do not depend
+        on Enter being accepted by the game window.
+        """
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            screen = self._load_screen()
+            value, center, _ = self._match_template(
+                screen,
+                self.ok_template_path
+            )
+
+            print(f"Post login OK Match: {value:.3f}")
+
+            if value >= self.ok_threshold and center:
+                pydirectinput.moveTo(
+                    center[0],
+                    center[1],
+                    duration=0.05
+                )
+                pydirectinput.click()
+                time.sleep(0.5)
+                return True
+
+            time.sleep(0.15)
+
+        # Fallback only if the OK template cannot be found.
         pydirectinput.press("enter")
         time.sleep(0.5)
+        return False
+
+    def is_password_error(self, message_type):
+        return message_type in {
+            self.WRONG_PASSWORD,
+            self.INVALID_ACCOUNT_PASSWORD
+        }
 
     def stop(self):
         self.running = False

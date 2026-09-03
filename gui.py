@@ -16,7 +16,6 @@ from tasks.memory_reader import ConquerMemoryReader
 from config import (
     CONFIG_FILE,
     WINDOW_TITLE,
-    WINDOW_SIZE,
     START_HOTKEY,
     STOP_HOTKEY
 )
@@ -29,11 +28,11 @@ ctk.set_default_color_theme("blue")
 class SimpleLauncher:
 
     def __init__(self):
-
         self.app = ctk.CTk()
         self.app.title(WINDOW_TITLE)
-        self.app.geometry(WINDOW_SIZE)
-        self.app.resizable(False, False)
+        self.app.geometry("1080x720")
+        self.app.minsize(950, 620)
+        self.app.resizable(True, True)
 
         self.launcher = Launcher()
         self.account_manager = AccountManager()
@@ -42,82 +41,327 @@ class SimpleLauncher:
         self.login_button_task = LoginButtonTask()
         self.post_login_task = PostLoginMessageTask()
 
-        self.stop_requested = False
+        self.account_rows = []
+        self.accounts_data = []
+        self.current_account_index = 0
+        self.pause_requested = False
+        self.is_running = False
 
         self.build_ui()
         self.load_settings()
+        self.load_accounts_into_ui()
 
         keyboard.add_hotkey(
             START_HOTKEY,
-            lambda: self.run_in_thread(self.open_selected)
+            lambda: self.app.after(0, self.resume_processing)
         )
 
         keyboard.add_hotkey(
             STOP_HOTKEY,
-            lambda: self.run_in_thread(self.stop_selected)
+            lambda: self.app.after(0, self.pause_processing)
         )
 
         self.app.protocol("WM_DELETE_WINDOW", self.close_program)
 
-    def build_ui(self):
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
 
+    def build_ui(self):
         title = ctk.CTkLabel(
             self.app,
-            text="PAGE LAUNCHER",
-            font=("Segoe UI", 26, "bold")
+            text="CONQUER LOGIN MANAGER",
+            font=("Segoe UI", 25, "bold")
         )
-        title.pack(pady=(25, 15))
+        title.pack(pady=(18, 10))
+
+        path_frame = ctk.CTkFrame(self.app)
+        path_frame.pack(fill="x", padx=18, pady=(0, 10))
 
         self.path_entry = ctk.CTkEntry(
-            self.app,
-            width=560,
-            height=40,
-            placeholder_text="لم يتم اختيار ملف..."
+            path_frame,
+            height=38,
+            placeholder_text="اختار play.exe"
         )
-        self.path_entry.pack(pady=10)
-
-        buttons_frame = ctk.CTkFrame(
-            self.app,
-            fg_color="transparent"
+        self.path_entry.pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=(10, 8),
+            pady=10
         )
-        buttons_frame.pack(pady=15)
 
         select_button = ctk.CTkButton(
-            buttons_frame,
+            path_frame,
             text="اختيار الصفحة",
-            width=160,
-            height=40,
+            width=130,
             command=self.select_file
         )
-        select_button.grid(row=0, column=0, padx=8)
+        select_button.pack(side="left", padx=(0, 10), pady=10)
 
-        open_button = ctk.CTkButton(
-            buttons_frame,
-            text="فتح  Alt + S",
+        controls = ctk.CTkFrame(self.app)
+        controls.pack(fill="x", padx=18, pady=(0, 10))
+
+        self.start_fresh_button = ctk.CTkButton(
+            controls,
+            text="ابدأ من الأول",
+            width=150,
+            height=40,
+            command=self.start_from_beginning
+        )
+        self.start_fresh_button.pack(side="left", padx=(10, 6), pady=10)
+
+        self.pause_button = ctk.CTkButton(
+            controls,
+            text=f"إيقاف مؤقت  {STOP_HOTKEY}",
             width=160,
             height=40,
-            command=lambda: self.run_in_thread(self.open_selected)
+            command=self.pause_processing
         )
-        open_button.grid(row=0, column=1, padx=8)
+        self.pause_button.pack(side="left", padx=6, pady=10)
 
-        stop_button = ctk.CTkButton(
-            buttons_frame,
-            text="إيقاف  Alt + A",
+        self.resume_button = ctk.CTkButton(
+            controls,
+            text=f"استكمال  {START_HOTKEY}",
             width=160,
             height=40,
-            command=lambda: self.run_in_thread(self.stop_selected)
+            command=self.resume_processing
         )
-        stop_button.grid(row=0, column=2, padx=8)
+        self.resume_button.pack(side="left", padx=6, pady=10)
+
+        self.add_account_button = ctk.CTkButton(
+            controls,
+            text="+ إضافة حساب",
+            width=140,
+            height=40,
+            command=self.add_empty_account
+        )
+        self.add_account_button.pack(side="right", padx=(6, 10), pady=10)
+
+        self.save_accounts_button = ctk.CTkButton(
+            controls,
+            text="حفظ الحسابات",
+            width=130,
+            height=40,
+            command=self.save_accounts_from_ui
+        )
+        self.save_accounts_button.pack(side="right", padx=6, pady=10)
+
+        header = ctk.CTkFrame(self.app, fg_color="transparent")
+        header.pack(fill="x", padx=28, pady=(3, 3))
+
+        headers = [
+            ("#", 35),
+            ("Username", 210),
+            ("Password", 210),
+            ("اسم الشخصية من Memory", 250),
+            ("الحالة", 80),
+            ("", 45),
+        ]
+
+        for column, (text, width) in enumerate(headers):
+            label = ctk.CTkLabel(
+                header,
+                text=text,
+                width=width,
+                font=("Segoe UI", 13, "bold")
+            )
+            label.grid(row=0, column=column, padx=4)
+
+        self.accounts_frame = ctk.CTkScrollableFrame(
+            self.app,
+            height=390
+        )
+        self.accounts_frame.pack(
+            fill="both",
+            expand=True,
+            padx=18,
+            pady=(0, 10)
+        )
 
         self.status_label = ctk.CTkLabel(
             self.app,
             text="جاهز",
-            font=("Segoe UI", 14)
+            font=("Segoe UI", 14, "bold"),
+            anchor="w"
         )
-        self.status_label.pack(pady=10)
+        self.status_label.pack(fill="x", padx=25, pady=(0, 14))
+
+    def create_account_row(self, account=None):
+        account = account or {}
+        row_index = len(self.account_rows)
+
+        row_frame = ctk.CTkFrame(self.accounts_frame)
+        row_frame.pack(fill="x", padx=4, pady=4)
+
+        number_label = ctk.CTkLabel(
+            row_frame,
+            text=str(row_index + 1),
+            width=35
+        )
+        number_label.grid(row=0, column=0, padx=4, pady=7)
+
+        username_entry = ctk.CTkEntry(
+            row_frame,
+            width=210,
+            placeholder_text="Username"
+        )
+        username_entry.grid(row=0, column=1, padx=4, pady=7)
+        username_entry.insert(0, account.get("username", ""))
+
+        password_entry = ctk.CTkEntry(
+            row_frame,
+            width=210,
+            placeholder_text="Password",
+            show="*"
+        )
+        password_entry.grid(row=0, column=2, padx=4, pady=7)
+        password_entry.insert(0, account.get("password", ""))
+
+        name_entry = ctk.CTkEntry(
+            row_frame,
+            width=250
+        )
+        name_entry.grid(row=0, column=3, padx=4, pady=7)
+        name_entry.insert(0, account.get("character_name", ""))
+        name_entry.configure(state="disabled")
+
+        lamp = ctk.CTkLabel(
+            row_frame,
+            text="●",
+            width=80,
+            font=("Segoe UI", 28, "bold"),
+            text_color="#777777"
+        )
+        lamp.grid(row=0, column=4, padx=4, pady=7)
+
+        delete_button = ctk.CTkButton(
+            row_frame,
+            text="×",
+            width=42,
+            height=32,
+            command=lambda idx=row_index: self.delete_account_row(idx)
+        )
+        delete_button.grid(row=0, column=5, padx=4, pady=7)
+
+        self.account_rows.append({
+            "frame": row_frame,
+            "number": number_label,
+            "username": username_entry,
+            "password": password_entry,
+            "name": name_entry,
+            "lamp": lamp,
+            "delete": delete_button,
+        })
+
+    def add_empty_account(self):
+        self.create_account_row()
+
+    def delete_account_row(self, index):
+        if self.is_running:
+            self.set_status("أوقف التنفيذ مؤقتًا قبل حذف حساب")
+            return
+
+        accounts = self.collect_accounts_from_ui(include_empty=True)
+
+        if 0 <= index < len(accounts):
+            accounts.pop(index)
+
+        self.rebuild_account_rows(accounts)
+        self.save_accounts_from_ui()
+
+    def rebuild_account_rows(self, accounts):
+        for row in self.account_rows:
+            row["frame"].destroy()
+
+        self.account_rows = []
+
+        for account in accounts:
+            self.create_account_row(account)
+
+    def load_accounts_into_ui(self):
+        accounts = self.account_manager.load_accounts()
+
+        if not accounts:
+            accounts = [{
+                "username": "",
+                "password": "",
+                "character_name": ""
+            }]
+
+        self.accounts_data = accounts
+        self.rebuild_account_rows(accounts)
+
+    def collect_accounts_from_ui(self, include_empty=False):
+        accounts = []
+
+        for row in self.account_rows:
+            username = row["username"].get().strip()
+            password = row["password"].get()
+
+            row["name"].configure(state="normal")
+            character_name = row["name"].get().strip()
+            row["name"].configure(state="disabled")
+
+            if include_empty or (username and password):
+                accounts.append({
+                    "username": username,
+                    "password": password,
+                    "character_name": character_name
+                })
+
+        return accounts
+
+    def save_accounts_from_ui(self):
+        accounts = self.collect_accounts_from_ui()
+
+        if not accounts:
+            self.set_status("أضف Username و Password لحساب واحد على الأقل")
+            return False
+
+        if self.account_manager.save_accounts(accounts):
+            self.accounts_data = accounts
+            self.set_status(f"تم حفظ {len(accounts)} حساب")
+            return True
+
+        self.set_status("حدث خطأ أثناء حفظ الحسابات")
+        return False
+
+    def set_row_state(self, index, state, page_name=None):
+        def apply_update():
+            if not (0 <= index < len(self.account_rows)):
+                return
+
+            row = self.account_rows[index]
+
+            colors = {
+                "idle": "#777777",
+                "working": "#E0A800",
+                "success": "#22C55E",
+                "error": "#EF4444",
+            }
+
+            row["lamp"].configure(
+                text_color=colors.get(state, "#777777")
+            )
+
+            if page_name is not None:
+                row["name"].configure(state="normal")
+                row["name"].delete(0, "end")
+                row["name"].insert(0, page_name)
+                row["name"].configure(state="disabled")
+
+        self.app.after(0, apply_update)
+
+    def reset_all_row_states(self):
+        for index in range(len(self.account_rows)):
+            self.set_row_state(index, "idle")
+
+    # ------------------------------------------------------------------
+    # File selection / settings
+    # ------------------------------------------------------------------
 
     def select_file(self):
-
         path = filedialog.askopenfilename(
             title="اختار الصفحة أو البرنامج",
             filetypes=[
@@ -136,12 +380,122 @@ class SimpleLauncher:
         self.save_settings()
         self.set_status("تم اختيار الملف")
 
+    # ------------------------------------------------------------------
+    # Start / Pause / Resume
+    # ------------------------------------------------------------------
+
+    def start_from_beginning(self):
+        if self.is_running:
+            self.set_status("البرنامج يعمل بالفعل")
+            return
+
+        if not self.save_accounts_from_ui():
+            return
+
+        self.current_account_index = 0
+        self.pause_requested = False
+        self.reset_all_row_states()
+        self.is_running = True
+        self.run_in_thread(self.process_accounts)
+
+    def resume_processing(self):
+        if self.is_running:
+            self.set_status("البرنامج يعمل بالفعل")
+            return
+
+        if not self.save_accounts_from_ui():
+            return
+
+        if self.current_account_index >= len(self.accounts_data):
+            self.set_status("تم الانتهاء من كل الحسابات - استخدم ابدأ من الأول لإعادة التشغيل")
+            return
+
+        self.pause_requested = False
+        self.is_running = True
+        self.run_in_thread(self.process_accounts)
+
+    def pause_processing(self):
+        if not self.is_running:
+            self.set_status(
+                f"متوقف مؤقتًا - الحساب التالي رقم {self.current_account_index + 1}"
+            )
+            return
+
+        self.pause_requested = True
+        self.set_status(
+            "تم طلب الإيقاف المؤقت - سيقف قبل فتح الحساب التالي"
+        )
+
+    def process_accounts(self):
+        path = self.path_entry.get().strip()
+        accounts = list(self.accounts_data)
+        total_accounts = len(accounts)
+
+        if not path or not os.path.exists(path):
+            self.set_status("المسار غير موجود أو لم يتم اختيار play.exe")
+            self.is_running = False
+            return
+
+        while self.current_account_index < total_accounts:
+            if self.pause_requested:
+                self.is_running = False
+                self.set_status(
+                    f"متوقف مؤقتًا - الحساب التالي رقم {self.current_account_index + 1}"
+                )
+                return
+
+            index = self.current_account_index
+            account = accounts[index]
+
+            self.set_row_state(index, "working")
+
+            result, page_name = self.run_account(
+                path=path,
+                username=account["username"],
+                password=account["password"],
+                account_number=index + 1,
+                total_accounts=total_accounts
+            )
+
+            if result != "SUCCESS":
+                self.set_row_state(index, "error", page_name or "")
+                self.is_running = False
+                self.set_status(
+                    f"الحساب {index + 1}: فشل - {result}"
+                )
+                return
+
+            self.set_row_state(index, "success", page_name)
+
+            # Save the name read from conquer.exe+8E6184 beside this account.
+            accounts[index]["character_name"] = page_name
+            self.accounts_data = accounts
+            self.account_manager.save_accounts(accounts)
+
+            # Important: advance the pointer BEFORE a possible pause.
+            # Resume therefore continues with the next account, not this one.
+            self.current_account_index = index + 1
+
+            if self.pause_requested:
+                self.is_running = False
+                self.set_status(
+                    f"متوقف مؤقتًا - الحساب التالي رقم {self.current_account_index + 1}"
+                )
+                return
+
+            self.set_status(
+                f"الحساب {index + 1}/{total_accounts}: تم - {page_name}"
+            )
+            time.sleep(1.0)
+
+        self.is_running = False
+        self.set_status(f"تم الانتهاء من {total_accounts} حساب")
+
+    # ------------------------------------------------------------------
+    # One account workflow
+    # ------------------------------------------------------------------
+
     def run_account(self, path, username, password, account_number, total_accounts):
-
-        if self.stop_requested:
-            return "STOPPED"
-
-        # Snapshot currently-open Conquer pages before opening this account.
         previous_conquer_pids = ConquerMemoryReader.list_conquer_pids()
 
         self.set_status(
@@ -151,8 +505,7 @@ class SimpleLauncher:
         success, message = self.launcher.open(path)
 
         if not success:
-            self.set_status(message)
-            return "OPEN_ERROR"
+            return "OPEN_ERROR", None
 
         self.set_status(
             f"الحساب {account_number}/{total_accounts}: جاري البحث عن Start Game..."
@@ -160,12 +513,11 @@ class SimpleLauncher:
 
         found = self.start_game_task.start()
 
-        if not found or self.stop_requested:
-            return "START_GAME_ERROR"
+        if not found:
+            return "START_GAME_ERROR", None
 
-        # Start Game should create one new conquer.exe process.
         self.set_status(
-            f"الحساب {account_number}/{total_accounts}: جاري تحديد PID الصفحة الجديدة..."
+            f"الحساب {account_number}/{total_accounts}: جاري تحديد conquer.exe الجديد..."
         )
 
         conquer_pid = ConquerMemoryReader.wait_for_new_conquer_pid(
@@ -174,13 +526,13 @@ class SimpleLauncher:
         )
 
         if conquer_pid is None:
-            return "CONQUER_PID_ERROR"
+            return "CONQUER_PID_ERROR", None
 
         try:
             memory_reader = ConquerMemoryReader(conquer_pid)
         except Exception as error:
             print(f"Could not open Conquer PID {conquer_pid}: {error}")
-            return "MEMORY_OPEN_ERROR"
+            return "MEMORY_OPEN_ERROR", None
 
         initial_name = memory_reader.read_name() or ""
         print(
@@ -196,25 +548,22 @@ class SimpleLauncher:
             password=password
         )
 
-        if not login_done or self.stop_requested:
+        if not login_done:
             memory_reader.close()
-            return "LOGIN_FIELDS_ERROR"
+            return "LOGIN_FIELDS_ERROR", None
 
         self.set_status(
             f"الحساب {account_number}/{total_accounts}: جاري الضغط على Log In..."
         )
 
-        button_done = self.login_button_task.start()
-
-        if not button_done or self.stop_requested:
+        if not self.login_button_task.start():
             memory_reader.close()
-            return "LOGIN_BUTTON_ERROR"
+            return "LOGIN_BUTTON_ERROR", None
 
         message_type = self.post_login_task.wait_for_message(
             timeout=6.0
         )
 
-        # Case 1: credentials are fine, server asks for another Log In.
         if message_type == PostLoginMessageTask.DISCONNECTED:
             self.set_status(
                 f"الحساب {account_number}/{total_accounts}: Disconnected - إعادة Log In..."
@@ -225,14 +574,12 @@ class SimpleLauncher:
 
             if not self.login_button_task.start():
                 memory_reader.close()
-                return "LOGIN_BUTTON_ERROR"
+                return "LOGIN_BUTTON_ERROR", None
 
             message_type = self.post_login_task.wait_for_message(
                 timeout=6.0
             )
 
-        # Case 2: retry the saved password once. If Wrong Password appears
-        # again after an explicit rewrite, report PAGE_ERROR to the main flow.
         if message_type == PostLoginMessageTask.WRONG_PASSWORD:
             self.set_status(
                 f"الحساب {account_number}/{total_accounts}: مراجعة الباسورد..."
@@ -241,17 +588,13 @@ class SimpleLauncher:
             self.post_login_task.press_ok()
             time.sleep(0.5)
 
-            password_done = self.login_task.rewrite_password(
-                password
-            )
-
-            if not password_done:
+            if not self.login_task.rewrite_password(password):
                 memory_reader.close()
-                return "PASSWORD_RETRY_ERROR"
+                return "PASSWORD_RETRY_ERROR", None
 
             if not self.login_button_task.start():
                 memory_reader.close()
-                return "LOGIN_BUTTON_ERROR"
+                return "LOGIN_BUTTON_ERROR", None
 
             second_message = self.post_login_task.wait_for_message(
                 timeout=6.0
@@ -260,7 +603,7 @@ class SimpleLauncher:
             if second_message == PostLoginMessageTask.WRONG_PASSWORD:
                 self.post_login_task.press_ok()
                 memory_reader.close()
-                return "PAGE_ERROR"
+                return "PAGE_ERROR", None
 
             if second_message == PostLoginMessageTask.DISCONNECTED:
                 self.post_login_task.press_ok()
@@ -268,12 +611,10 @@ class SimpleLauncher:
 
                 if not self.login_button_task.start():
                     memory_reader.close()
-                    return "LOGIN_BUTTON_ERROR"
+                    return "LOGIN_BUTTON_ERROR", None
 
-        # Final proof that this page actually entered the game:
-        # conquer.exe + 0x8E6184 must change to a non-empty character/page name.
         self.set_status(
-            f"الحساب {account_number}/{total_accounts}: جاري التأكد من اسم الصفحة من الذاكرة..."
+            f"الحساب {account_number}/{total_accounts}: جاري قراءة اسم الشخصية من Memory..."
         )
 
         page_name = memory_reader.wait_for_name_change(
@@ -285,104 +626,19 @@ class SimpleLauncher:
         memory_reader.close()
 
         if not page_name:
-            return "MEMORY_NAME_TIMEOUT"
+            return "MEMORY_NAME_TIMEOUT", None
 
         print(
             f"Account {account_number} ready - PID {conquer_pid} - Name: {page_name}"
         )
 
-        self.set_status(
-            f"الحساب {account_number}/{total_accounts}: تم الدخول - {page_name}"
-        )
+        return "SUCCESS", page_name
 
-        return "SUCCESS"
-
-    def open_selected(self):
-
-        self.stop_requested = False
-        path = self.path_entry.get().strip()
-
-        accounts = self.account_manager.load_accounts()
-
-        # If accounts.json exists and has accounts, open one new page per account.
-        if accounts:
-            total_accounts = len(accounts)
-
-            for index, account in enumerate(accounts, start=1):
-                if self.stop_requested:
-                    self.set_status("تم الإيقاف")
-                    return
-
-                result = self.run_account(
-                    path=path,
-                    username=account["username"],
-                    password=account["password"],
-                    account_number=index,
-                    total_accounts=total_accounts
-                )
-
-                if result == "PAGE_ERROR":
-                    self.set_status(
-                        f"الحساب {index}: PAGE_ERROR - الصفحة تحتاج معالجة من البرنامج الرئيسي"
-                    )
-                    return
-
-                if result != "SUCCESS":
-                    self.set_status(
-                        f"الحساب {index}: فشل - {result}"
-                    )
-                    return
-
-                self.set_status(
-                    f"الحساب {index}/{total_accounts}: تم - الانتقال للحساب التالي..."
-                )
-
-                time.sleep(1.0)
-
-            self.set_status(
-                f"تم الانتهاء من {total_accounts} حساب"
-            )
-            return
-
-        # Backward-compatible single-account mode using credentials.json.
-        username, password = self.login_task.load_credentials()
-
-        if not username or not password:
-            self.set_status(
-                "لا يوجد accounts.json ولا بيانات صالحة في credentials.json"
-            )
-            return
-
-        result = self.run_account(
-            path=path,
-            username=username,
-            password=password,
-            account_number=1,
-            total_accounts=1
-        )
-
-        if result == "PAGE_ERROR":
-            self.set_status(
-                "PAGE_ERROR - الصفحة تحتاج معالجة من البرنامج الرئيسي"
-            )
-        elif result == "SUCCESS":
-            self.set_status("تم تسجيل الدخول")
-        else:
-            self.set_status(f"فشل - {result}")
-
-    def stop_selected(self):
-
-        self.stop_requested = True
-        self.start_game_task.stop()
-        self.login_task.stop()
-        self.login_button_task.stop()
-        self.post_login_task.stop()
-        self.launcher.stop()
-
-        self.set_status("تم الإيقاف")
+    # ------------------------------------------------------------------
+    # General helpers
+    # ------------------------------------------------------------------
 
     def save_settings(self):
-
         try:
             data = {
                 "selected_path": self.path_entry.get().strip()
@@ -404,7 +660,6 @@ class SimpleLauncher:
             pass
 
     def load_settings(self):
-
         if not os.path.exists(CONFIG_FILE):
             return
 
@@ -420,27 +675,23 @@ class SimpleLauncher:
 
             if path:
                 self.path_entry.insert(0, path)
-                self.set_status("تم تحميل آخر مسار")
 
         except Exception:
             pass
 
     def set_status(self, text):
-
         self.app.after(
             0,
             lambda: self.status_label.configure(text=text)
         )
 
     def run_in_thread(self, function):
-
         threading.Thread(
             target=function,
             daemon=True
         ).start()
 
     def close_program(self):
-
         try:
             keyboard.unhook_all_hotkeys()
         except Exception:

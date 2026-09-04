@@ -342,6 +342,7 @@ class MaintenanceAwareLauncher(SimpleLauncher):
         self.active_sessions[account_number - 1] = {
             "pid": conquer_pid,
             "username": username,
+            "password": password,
             "page_name": page_name,
         }
 

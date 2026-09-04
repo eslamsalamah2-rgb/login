@@ -47,6 +47,11 @@ class SimpleLauncher:
         self.pause_requested = False
         self.is_running = False
 
+        # Successful pages are registered here by account-row index.
+        # The monitor only observes them for now; it does NOT reopen anything.
+        self.active_sessions = {}
+        self.monitor_stop_event = threading.Event()
+
         self.build_ui()
         self.load_settings()
         self.load_accounts_into_ui()
@@ -60,6 +65,10 @@ class SimpleLauncher:
             STOP_HOTKEY,
             lambda: self.app.after(0, self.pause_processing)
         )
+
+        # Permanent background state monitor. It checks registered pages every
+        # 10 seconds and changes only their lamps.
+        self.run_in_thread(self.monitor_active_sessions)
 
         self.app.protocol("WM_DELETE_WINDOW", self.close_program)
 
@@ -267,6 +276,10 @@ class SimpleLauncher:
         if 0 <= index < len(accounts):
             accounts.pop(index)
 
+        # Row indexes change after deletion, so stop associating old PIDs with
+        # the rebuilt list until a new run registers them again.
+        self.active_sessions.clear()
+
         self.rebuild_account_rows(accounts)
         self.save_accounts_from_ui()
 
@@ -394,6 +407,11 @@ class SimpleLauncher:
 
         self.current_account_index = 0
         self.pause_requested = False
+
+        # A fresh run creates fresh conquer.exe processes, so remove the old
+        # PID-to-row associations. This does not close any existing pages.
+        self.active_sessions.clear()
+
         self.reset_all_row_states()
         self.is_running = True
         self.run_in_thread(self.process_accounts)
@@ -535,8 +553,14 @@ class SimpleLauncher:
             return "MEMORY_OPEN_ERROR", None
 
         initial_name = memory_reader.read_name() or ""
+        initial_state = memory_reader.read_state()
+
         print(
             f"Conquer PID {conquer_pid} initial name: {initial_name!r}"
+        )
+        print(
+            f"Conquer PID {conquer_pid} initial state: "
+            f"{initial_state} ({ConquerMemoryReader.state_name(initial_state)})"
         )
 
         self.set_status(
@@ -623,6 +647,14 @@ class SimpleLauncher:
             require_change=True
         )
 
+        # Read the new state once as useful test output. Continuous monitoring
+        # begins after the account has been registered below.
+        final_state = memory_reader.read_state()
+        print(
+            f"Conquer PID {conquer_pid} state after login: "
+            f"{final_state} ({ConquerMemoryReader.state_name(final_state)})"
+        )
+
         memory_reader.close()
 
         if not page_name:
@@ -632,7 +664,68 @@ class SimpleLauncher:
             f"Account {account_number} ready - PID {conquer_pid} - Name: {page_name}"
         )
 
+        # Register the exact PID against this account row. From this point the
+        # background monitor will check STATE_OFFSET every 10 seconds.
+        self.active_sessions[account_number - 1] = {
+            "pid": conquer_pid,
+            "username": username,
+            "page_name": page_name,
+        }
+
         return "SUCCESS", page_name
+
+    # ------------------------------------------------------------------
+    # Continuous account-state monitor (test phase: observe only)
+    # ------------------------------------------------------------------
+
+    def monitor_active_sessions(self):
+        """Check every successful account's state once every 10 seconds.
+
+        Current test behavior:
+        - 7667828 / LOGGED_IN -> green lamp
+        - 0 / OPEN -> red lamp
+        - 7667712 / LOGGED_OUT -> red lamp
+        - unknown value, dead PID, or read error -> red lamp
+
+        No automatic relog/reopen happens in this test phase.
+        """
+        while not self.monitor_stop_event.is_set():
+            sessions = list(self.active_sessions.items())
+
+            for row_index, session in sessions:
+                pid = session.get("pid")
+
+                if not pid:
+                    continue
+
+                reader = None
+                value = None
+
+                try:
+                    reader = ConquerMemoryReader(pid)
+                    value = reader.read_state()
+                except Exception as error:
+                    print(
+                        f"State monitor could not open PID {pid}: {error}"
+                    )
+                finally:
+                    if reader is not None:
+                        reader.close()
+
+                state_text = ConquerMemoryReader.state_name(value)
+
+                print(
+                    f"State monitor - account {row_index + 1} - PID {pid} - "
+                    f"Value: {value} - {state_text}"
+                )
+
+                if value == ConquerMemoryReader.STATE_LOGGED_IN:
+                    self.set_row_state(row_index, "success")
+                else:
+                    self.set_row_state(row_index, "error")
+
+            # Event.wait lets closing the program interrupt the 10-second wait.
+            self.monitor_stop_event.wait(10.0)
 
     # ------------------------------------------------------------------
     # General helpers
@@ -692,6 +785,8 @@ class SimpleLauncher:
         ).start()
 
     def close_program(self):
+        self.monitor_stop_event.set()
+
         try:
             keyboard.unhook_all_hotkeys()
         except Exception:

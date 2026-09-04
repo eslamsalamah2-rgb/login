@@ -9,6 +9,7 @@ import win32process
 from PIL import ImageGrab
 from tasks.base_task import BaseTask
 from tasks.window_disconnect_detector import WindowDisconnectDetector
+from tasks.target_window_context import TargetWindowContext
 
 
 class LoginButtonTask(BaseTask):
@@ -26,6 +27,7 @@ class LoginButtonTask(BaseTask):
 
     def set_target_pid(self, pid):
         self.target_pid = pid
+        TargetWindowContext.set_pid(pid)
 
     def _foreground_pid(self):
         try:
@@ -92,7 +94,11 @@ class LoginButtonTask(BaseTask):
         self.running = True
 
         if target_pid is not None:
-            self.target_pid = target_pid
+            self.set_target_pid(target_pid)
+        else:
+            shared_pid = TargetWindowContext.get_pid()
+            if shared_pid:
+                self.target_pid = shared_pid
 
         start_time = time.time()
 

@@ -6,19 +6,10 @@ from tasks.post_login_message_task import PostLoginMessageTask
 
 
 class MaintenanceAwareLauncher(SimpleLauncher):
-    """SimpleLauncher with automatic server-maintenance recovery.
-
-    When the maintenance dialog appears after Log In:
-    1. Click OK.
-    2. Close every conquer.exe page.
-    3. Wait 60 seconds.
-    4. Restart the account sequence from account 1.
-    5. Repeat once per minute until maintenance is gone.
-
-    Existing successful-account monitoring remains handled by SimpleLauncher.
-    """
+    """SimpleLauncher with maintenance and client-update recovery."""
 
     MAINTENANCE_RETRY_SECONDS = 60
+    UPDATE_RETRY_SECONDS = 5
 
     def _maintenance_result(self, memory_reader):
         self.post_login_task.press_ok()
@@ -27,6 +18,14 @@ class MaintenanceAwareLauncher(SimpleLauncher):
             memory_reader.close()
 
         return "SERVER_MAINTENANCE", None
+
+    def _client_update_result(self, memory_reader):
+        self.post_login_task.press_ok()
+
+        if memory_reader is not None:
+            memory_reader.close()
+
+        return "CLIENT_UPDATE", None
 
     def _wait_maintenance_retry(self):
         remaining = self.MAINTENANCE_RETRY_SECONDS
@@ -39,6 +38,21 @@ class MaintenanceAwareLauncher(SimpleLauncher):
                 f"صيانة السيرفر - المحاولة التالية بعد {remaining} ثانية"
             )
 
+            time.sleep(1.0)
+            remaining -= 1
+
+        return True
+
+    def _wait_update_retry(self):
+        remaining = self.UPDATE_RETRY_SECONDS
+
+        while remaining > 0:
+            if self.pause_requested:
+                return False
+
+            self.set_status(
+                f"يوجد Update - إعادة فتح اللعبة بعد {remaining} ثانية"
+            )
             time.sleep(1.0)
             remaining -= 1
 
@@ -85,7 +99,6 @@ class MaintenanceAwareLauncher(SimpleLauncher):
                     f"Server maintenance: closed {closed_count} conquer.exe process(es)"
                 )
 
-                # All previously registered sessions are now closed.
                 self.active_sessions.clear()
                 self.current_account_index = 0
                 self.reset_all_row_states()
@@ -95,8 +108,27 @@ class MaintenanceAwareLauncher(SimpleLauncher):
                     self.set_status("متوقف مؤقتًا أثناء انتظار صيانة السيرفر")
                     return
 
-                # Retry from account 1. If maintenance still exists, the same
-                # flow repeats and waits another minute.
+                continue
+
+            if result == "CLIENT_UPDATE":
+                self.set_status(
+                    "تم اكتشاف Update - جاري إغلاق كل صفحات Conquer وإعادة فتح اللعبة..."
+                )
+
+                closed_count = ConquerMemoryReader.terminate_all_conquer()
+                print(
+                    f"Client update: closed {closed_count} conquer.exe process(es)"
+                )
+
+                self.active_sessions.clear()
+                self.current_account_index = 0
+                self.reset_all_row_states()
+
+                if not self._wait_update_retry():
+                    self.is_running = False
+                    self.set_status("متوقف مؤقتًا أثناء انتظار الـ Update")
+                    return
+
                 continue
 
             if result != "SUCCESS":
@@ -208,6 +240,9 @@ class MaintenanceAwareLauncher(SimpleLauncher):
         if message_type == PostLoginMessageTask.SERVER_MAINTENANCE:
             return self._maintenance_result(memory_reader)
 
+        if message_type == PostLoginMessageTask.CLIENT_UPDATE:
+            return self._client_update_result(memory_reader)
+
         if message_type == PostLoginMessageTask.DISCONNECTED:
             self.set_status(
                 f"الحساب {account_number}/{total_accounts}: Disconnected - إعادة Log In..."
@@ -226,6 +261,9 @@ class MaintenanceAwareLauncher(SimpleLauncher):
 
             if message_type == PostLoginMessageTask.SERVER_MAINTENANCE:
                 return self._maintenance_result(memory_reader)
+
+            if message_type == PostLoginMessageTask.CLIENT_UPDATE:
+                return self._client_update_result(memory_reader)
 
         if message_type == PostLoginMessageTask.WRONG_PASSWORD:
             self.set_status(
@@ -250,6 +288,9 @@ class MaintenanceAwareLauncher(SimpleLauncher):
             if second_message == PostLoginMessageTask.SERVER_MAINTENANCE:
                 return self._maintenance_result(memory_reader)
 
+            if second_message == PostLoginMessageTask.CLIENT_UPDATE:
+                return self._client_update_result(memory_reader)
+
             if second_message == PostLoginMessageTask.WRONG_PASSWORD:
                 self.post_login_task.press_ok()
                 memory_reader.close()
@@ -263,8 +304,6 @@ class MaintenanceAwareLauncher(SimpleLauncher):
                     memory_reader.close()
                     return "LOGIN_BUTTON_ERROR", None
 
-                # One more short dialog check after the extra Log In so a
-                # maintenance message cannot leave us waiting on memory forever.
                 third_message = self.post_login_task.wait_for_message(
                     timeout=6.0
                 )
@@ -272,13 +311,13 @@ class MaintenanceAwareLauncher(SimpleLauncher):
                 if third_message == PostLoginMessageTask.SERVER_MAINTENANCE:
                     return self._maintenance_result(memory_reader)
 
+                if third_message == PostLoginMessageTask.CLIENT_UPDATE:
+                    return self._client_update_result(memory_reader)
+
         self.set_status(
             f"الحساب {account_number}/{total_accounts}: جاري قراءة اسم الشخصية من Memory..."
         )
 
-        # Keep the existing name-address confirmation behavior. The state
-        # monitor continues checking the 4-byte state every 10 seconds after
-        # this account succeeds.
         page_name = memory_reader.wait_for_name_change(
             previous_value=initial_name,
             timeout=20.0,

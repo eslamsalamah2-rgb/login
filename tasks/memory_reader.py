@@ -7,7 +7,16 @@ import pymem.process
 class ConquerMemoryReader:
 
     PROCESS_NAME = "conquer.exe"
+
+    # Character/page name shown after a successful login.
     NAME_OFFSET = 0x8E6184
+
+    # 4-byte account/page state supplied from the memory scanner.
+    STATE_OFFSET = 0x8E52AE
+
+    STATE_OPEN = 0
+    STATE_LOGGED_IN = 7667828
+    STATE_LOGGED_OUT = 7667712
 
     @classmethod
     def list_conquer_pids(cls):
@@ -52,17 +61,25 @@ class ConquerMemoryReader:
         except Exception:
             pass
 
+    def _module_base(self):
+        module = pymem.process.module_from_name(
+            self.pm.process_handle,
+            self.PROCESS_NAME
+        )
+
+        if module is None:
+            return None
+
+        return module.lpBaseOfDll
+
     def read_name(self, max_length=64):
         try:
-            module = pymem.process.module_from_name(
-                self.pm.process_handle,
-                self.PROCESS_NAME
-            )
+            module_base = self._module_base()
 
-            if module is None:
+            if module_base is None:
                 return None
 
-            address = module.lpBaseOfDll + self.NAME_OFFSET
+            address = module_base + self.NAME_OFFSET
             value = self.pm.read_string(address, max_length)
 
             if value is None:
@@ -72,9 +89,42 @@ class ConquerMemoryReader:
 
         except Exception as error:
             print(
-                f"Memory read error for PID {self.pid}: {error}"
+                f"Memory name read error for PID {self.pid}: {error}"
             )
             return None
+
+    def read_state(self):
+        """Read the 4-byte state at conquer.exe + 0x8E52AE."""
+        try:
+            module_base = self._module_base()
+
+            if module_base is None:
+                return None
+
+            address = module_base + self.STATE_OFFSET
+            return self.pm.read_int(address)
+
+        except Exception as error:
+            print(
+                f"Memory state read error for PID {self.pid}: {error}"
+            )
+            return None
+
+    @classmethod
+    def state_name(cls, value):
+        if value == cls.STATE_OPEN:
+            return "OPEN"
+
+        if value == cls.STATE_LOGGED_IN:
+            return "LOGGED_IN"
+
+        if value == cls.STATE_LOGGED_OUT:
+            return "LOGGED_OUT"
+
+        if value is None:
+            return "READ_ERROR"
+
+        return f"UNKNOWN({value})"
 
     def wait_for_name_change(
         self,

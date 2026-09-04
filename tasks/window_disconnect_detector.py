@@ -5,6 +5,8 @@ import win32con
 import win32gui
 import win32process
 
+from tasks.target_window_context import TargetWindowContext
+
 
 class WindowDisconnectDetector:
     """Detect Conquer disconnect dialogs through Win32 window handles.
@@ -81,7 +83,6 @@ class WindowDisconnectDetector:
         return self.find_disconnect_dialog(pid) is not None
 
     def press_ok(self, pid):
-        """Press the dialog OK button by HWND without needing screen focus."""
         dialog = self.find_disconnect_dialog(pid)
         if not dialog:
             return False
@@ -120,7 +121,6 @@ class WindowDisconnectDetector:
             return False
 
     def _main_window_for_pid(self, pid):
-        """Return the largest visible non-dialog window owned by this PID."""
         candidates = []
 
         for hwnd in self._windows_for_pid(pid):
@@ -151,13 +151,10 @@ class WindowDisconnectDetector:
         return candidates[0][1]
 
     def activate_main_window(self, pid):
-        """Force the target Conquer page to the foreground automatically.
+        """Force the exact target Conquer page to foreground and lock its PID."""
+        if pid:
+            TargetWindowContext.set_pid(pid)
 
-        Windows can reject a plain SetForegroundWindow when our process is not
-        currently foreground. To make recovery autonomous we temporarily attach
-        our input thread to the foreground window thread, restore the game,
-        raise it, set it foreground/focus, then detach again.
-        """
         hwnd = self._main_window_for_pid(pid)
         if not hwnd:
             return False
@@ -206,7 +203,6 @@ class WindowDisconnectDetector:
                     )
                 )
 
-            # Raise it without permanently changing always-on-top state.
             win32gui.SetWindowPos(
                 hwnd,
                 win32con.HWND_TOP,
@@ -239,6 +235,7 @@ class WindowDisconnectDetector:
             success = user32.GetForegroundWindow() == hwnd
 
             if success:
+                TargetWindowContext.set_pid(pid)
                 print(f"Activated Conquer window - PID {pid} - HWND {hwnd}")
             else:
                 print(f"Could not fully foreground Conquer window - PID {pid} - HWND {hwnd}")

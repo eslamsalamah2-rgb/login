@@ -1,6 +1,6 @@
-from gui import SimpleLauncher
+from maintenance_launcher import MaintenanceAwareLauncher
 
 
 if __name__ == "__main__":
-    app = SimpleLauncher()
+    app = MaintenanceAwareLauncher()
     app.run()

@@ -14,6 +14,7 @@ class PostLoginMessageTask(BaseTask):
     WRONG_PASSWORD = "WRONG_PASSWORD"
     INVALID_ACCOUNT_PASSWORD = "INVALID_ACCOUNT_PASSWORD"
     SERVER_MAINTENANCE = "SERVER_MAINTENANCE"
+    CLIENT_UPDATE = "CLIENT_UPDATE"
 
     def __init__(self):
         super().__init__()
@@ -34,6 +35,10 @@ class PostLoginMessageTask(BaseTask):
             self.SERVER_MAINTENANCE: os.path.join(
                 "assets",
                 "server_maintenance.png"
+            ),
+            self.CLIENT_UPDATE: os.path.join(
+                "assets",
+                "client_update.png"
             )
         }
 
@@ -109,8 +114,6 @@ class PostLoginMessageTask(BaseTask):
         if best_value < self.threshold:
             return None
 
-        # Both password dialogs use the same recovery flow in gui.py:
-        # click OK, erase/rewrite the password, and try Log In again.
         if best_type == self.INVALID_ACCOUNT_PASSWORD:
             return self.WRONG_PASSWORD
 
@@ -136,7 +139,6 @@ class PostLoginMessageTask(BaseTask):
         return None
 
     def press_ok(self, timeout=3.0):
-        """Find the actual OK button image and click it."""
         start_time = time.time()
 
         while time.time() - start_time < timeout:
@@ -160,7 +162,6 @@ class PostLoginMessageTask(BaseTask):
 
             time.sleep(0.15)
 
-        # Fallback in case the button image cannot be found.
         pydirectinput.press("enter")
         time.sleep(0.5)
         return False

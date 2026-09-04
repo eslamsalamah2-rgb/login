@@ -111,6 +111,52 @@ class LoginTask(BaseTask):
             pydirectinput.press("backspace")
             time.sleep(0.02)
 
+    def _type_exact(self, text, interval=0.04):
+        """Type ASCII credentials exactly as stored, independent of Caps Lock.
+
+        Lowercase letters are sent as their physical key with no Shift.
+        Uppercase letters are sent as Shift + the physical key.
+        Before typing, Caps Lock is forced OFF temporarily and restored to its
+        original state afterwards, so the user's keyboard state is preserved.
+        """
+        text = str(text)
+
+        caps_was_on = False
+        try:
+            import ctypes
+            caps_was_on = bool(ctypes.windll.user32.GetKeyState(0x14) & 0x0001)
+        except Exception:
+            caps_was_on = False
+
+        try:
+            if caps_was_on:
+                pydirectinput.press("capslock")
+                time.sleep(0.08)
+
+            for char in text:
+                if "A" <= char <= "Z":
+                    key = char.lower()
+                    pydirectinput.keyDown("shift")
+                    pydirectinput.press(key)
+                    pydirectinput.keyUp("shift")
+                else:
+                    pydirectinput.write(char)
+
+                if interval:
+                    time.sleep(interval)
+
+        finally:
+            # Never leave Shift held if typing is interrupted.
+            try:
+                pydirectinput.keyUp("shift")
+            except Exception:
+                pass
+
+            # Return Caps Lock to exactly the state the user had before typing.
+            if caps_was_on:
+                pydirectinput.press("capslock")
+                time.sleep(0.08)
+
     def start(self, username=None, password=None):
 
         self.running = True
@@ -149,12 +195,12 @@ class LoginTask(BaseTask):
                 self.clear_username_field()
                 time.sleep(0.10)
 
-                pydirectinput.write(username, interval=0.04)
+                self._type_exact(username, interval=0.04)
                 time.sleep(0.20)
 
                 pydirectinput.click(password_x, password_y)
                 time.sleep(0.15)
-                pydirectinput.write(password, interval=0.04)
+                self._type_exact(password, interval=0.04)
 
                 print(f"Login credentials entered for {username}")
 
@@ -203,10 +249,10 @@ class LoginTask(BaseTask):
         # Click the normal password typing area and type it again from scratch.
         pydirectinput.click(password_x, password_y)
         time.sleep(0.15)
-        pydirectinput.write(password, interval=0.04)
+        self._type_exact(password, interval=0.04)
         time.sleep(0.20)
 
-        print("Password rewritten from scratch")
+        print("Password rewritten from scratch with exact letter case")
         return True
 
     def stop(self):

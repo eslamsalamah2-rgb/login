@@ -6,11 +6,16 @@ from tasks.memory_reader import ConquerMemoryReader
 
 
 class SelectionAwareLauncher(ClearAllAwareLauncher):
-    """Adds per-account checkboxes so only selected accounts are processed."""
+    """Adds per-account checkboxes and incremental selected-account starting."""
 
     def __init__(self):
         self.selected_run_only = True
+        self.pending_start_indices = []
         super().__init__()
+
+        # Start is incremental now: it opens only selected accounts that do not
+        # already have a live registered Conquer page.
+        self.start_fresh_button.configure(text="Start")
 
         controls = self.resume_button.master
 
@@ -84,55 +89,156 @@ class SelectionAwareLauncher(ClearAllAwareLauncher):
             if self._is_account_selected(index)
         ]
 
-    def start_from_beginning(self):
+    def _account_has_live_session(self, index, live_pids=None):
+        session = self.active_sessions.get(index)
+        if not session:
+            return False
+
+        pid = session.get("pid")
+        if not pid:
+            return False
+
+        if live_pids is None:
+            live_pids = set(ConquerMemoryReader.list_conquer_pids())
+
+        return pid in live_pids
+
+    def _account_is_recovering(self, index):
+        try:
+            with self.recovering_accounts_lock:
+                return index in self.recovering_accounts
+        except Exception:
+            return False
+
+    def _build_incremental_start_queue(self):
         selected = self._selected_indices()
+        live_pids = set(ConquerMemoryReader.list_conquer_pids())
+        pending = []
+
+        for index in selected:
+            if self._account_has_live_session(index, live_pids):
+                # Already running: keep it exactly as it is.
+                self.set_row_state(index, "success")
+                continue
+
+            if self._account_is_recovering(index):
+                # A background recovery already owns this account, so do not
+                # create a second page for it.
+                continue
+
+            pending.append(index)
+
+        return selected, pending
+
+    def start_from_beginning(self):
+        """Start only newly selected accounts; never restart live selected ones."""
+        if self.is_running:
+            self.set_status("يوجد تشغيل جاري بالفعل")
+            return
+
+        if not self.save_accounts_from_ui():
+            return
+
+        selected, pending = self._build_incremental_start_queue()
+
         if not selected:
             self.set_status("حدد حساب واحد على الأقل قبل التشغيل")
             return
-        super().start_from_beginning()
 
-    def resume_processing(self):
-        selected = [
-            index for index in self._selected_indices()
-            if index >= self.current_account_index
-        ]
-
-        # If monitoring is merely paused after all selected accounts opened,
-        # let the parent resume the monitor even though there is no new account.
-        if not selected and self.current_account_index < len(self.account_rows):
-            self.set_status("لا توجد حسابات محددة متبقية بعد نقطة الاستكمال الحالية")
+        if not pending:
+            self.monitor_pause_event.clear()
+            self.pause_requested = False
+            self.set_status("كل الحسابات المحددة شغالة بالفعل - مفيش حساب جديد محتاج Start")
             return
 
-        super().resume_processing()
+        # Do NOT clear active_sessions here. Existing live pages must stay
+        # registered and monitored while only the newly selected rows are opened.
+        self.pending_start_indices = list(pending)
+        self.current_account_index = pending[0]
+        self.pause_requested = False
+        self.monitor_pause_event.clear()
+        self.is_running = True
+
+        print(
+            "Incremental Start - selected rows: "
+            f"{[i + 1 for i in selected]} - opening only: {[i + 1 for i in pending]}"
+        )
+        self.set_status(
+            f"Start: جاري تشغيل {len(pending)} حساب جديد فقط من الحسابات المحددة"
+        )
+        self.run_in_thread(self.process_accounts)
+
+    def resume_processing(self):
+        self.monitor_pause_event.clear()
+        self.pause_requested = False
+
+        if self.is_running:
+            self.set_status("يوجد تشغيل جاري بالفعل")
+            return
+
+        if self.pending_start_indices:
+            self.is_running = True
+            self.run_in_thread(self.process_accounts)
+            return
+
+        # Nothing was paused mid-start. Treat Resume as monitor resume only.
+        self.set_status("تم استكمال مراقبة الحسابات المفتوحة")
 
     def process_accounts(self):
         path = self.path_entry.get().strip()
         accounts = list(self.accounts_data)
         total_accounts = len(accounts)
-        selected_indices = set(self._selected_indices())
 
         if not path:
             self.set_status("لم يتم اختيار play.exe")
             self.is_running = False
             return
 
-        if not selected_indices:
+        # A maintenance/update restart may call us without a prepared queue.
+        if not self.pending_start_indices:
+            _, pending = self._build_incremental_start_queue()
+            self.pending_start_indices = list(pending)
+
+        if not self.pending_start_indices:
             self.is_running = False
-            self.set_status("لا توجد حسابات محددة للتشغيل")
+            self.set_status("لا توجد حسابات جديدة محددة تحتاج تشغيل")
             return
 
-        while self.current_account_index < total_accounts:
+        requested_total = len(self.pending_start_indices)
+        completed = 0
+
+        while self.pending_start_indices:
             if self.pause_requested:
                 self.is_running = False
-                self.set_status("متوقف مؤقتًا")
+                next_index = self.pending_start_indices[0]
+                self.current_account_index = next_index
+                self.set_status(
+                    f"متوقف مؤقتًا - الحساب التالي المحدد رقم {next_index + 1}"
+                )
                 return
 
-            index = self.current_account_index
+            index = self.pending_start_indices[0]
+            self.current_account_index = index
 
-            # Skip every unticked row without opening or touching it.
-            if index not in selected_indices:
-                self.set_row_state(index, "idle")
-                self.current_account_index = index + 1
+            # The user may untick a row after pressing Start. Do not open it.
+            if not self._is_account_selected(index):
+                self.pending_start_indices.pop(0)
+                continue
+
+            live_pids = set(ConquerMemoryReader.list_conquer_pids())
+            if self._account_has_live_session(index, live_pids):
+                # It may have recovered/opened while waiting in this queue.
+                self.set_row_state(index, "success")
+                self.pending_start_indices.pop(0)
+                continue
+
+            if self._account_is_recovering(index):
+                # Leave recovery in charge and skip duplicate opening.
+                self.pending_start_indices.pop(0)
+                continue
+
+            if not (0 <= index < len(accounts)):
+                self.pending_start_indices.pop(0)
                 continue
 
             account = accounts[index]
@@ -150,26 +256,34 @@ class SelectionAwareLauncher(ClearAllAwareLauncher):
                 self.set_status("تم اكتشاف صيانة السيرفر - جاري إغلاق كل صفحات Conquer...")
                 ConquerMemoryReader.terminate_all_conquer()
                 self.active_sessions.clear()
-                self.current_account_index = 0
                 self.reset_all_row_states()
 
                 if not self._wait_maintenance_retry():
                     self.is_running = False
                     self.set_status("متوقف مؤقتًا أثناء انتظار صيانة السيرفر")
                     return
+
+                # All pages were closed globally, so every currently selected
+                # account needs to be opened again.
+                self.pending_start_indices = list(self._selected_indices())
+                requested_total = len(self.pending_start_indices)
+                completed = 0
                 continue
 
             if result == "CLIENT_UPDATE":
                 self.set_status("تم اكتشاف Update - جاري إغلاق كل صفحات Conquer وإعادة الفتح...")
                 ConquerMemoryReader.terminate_all_conquer()
                 self.active_sessions.clear()
-                self.current_account_index = 0
                 self.reset_all_row_states()
 
                 if not self._wait_update_retry():
                     self.is_running = False
                     self.set_status("متوقف مؤقتًا أثناء انتظار الـ Update")
                     return
+
+                self.pending_start_indices = list(self._selected_indices())
+                requested_total = len(self.pending_start_indices)
+                completed = 0
                 continue
 
             if result != "SUCCESS":
@@ -182,18 +296,20 @@ class SelectionAwareLauncher(ClearAllAwareLauncher):
             accounts[index]["character_name"] = page_name
             self.accounts_data = accounts
             self.account_manager.save_accounts(accounts)
-            self.current_account_index = index + 1
+
+            self.pending_start_indices.pop(0)
+            completed += 1
 
             if self.pause_requested:
                 self.is_running = False
                 self.set_status("متوقف مؤقتًا")
                 return
 
-            selected_done = sum(1 for i in selected_indices if i < self.current_account_index)
             self.set_status(
-                f"تم تشغيل {selected_done}/{len(selected_indices)} من الحسابات المحددة - {page_name}"
+                f"Start: تم تشغيل {completed}/{requested_total} حساب جديد - {page_name}"
             )
             time.sleep(1.0)
 
+        self.current_account_index = len(accounts)
         self.is_running = False
-        self.set_status(f"تم الانتهاء من {len(selected_indices)} حساب محدد")
+        self.set_status(f"Start تم - اتشغل {completed} حساب جديد، والصفحات القديمة فضلت شغالة")

@@ -10,6 +10,7 @@ import win32process
 from PIL import ImageGrab
 from tasks.base_task import BaseTask
 from tasks.window_disconnect_detector import WindowDisconnectDetector
+from tasks.target_window_context import TargetWindowContext
 
 
 class LoginTask(BaseTask):
@@ -29,6 +30,7 @@ class LoginTask(BaseTask):
 
     def set_target_pid(self, pid):
         self.target_pid = pid
+        TargetWindowContext.set_pid(pid)
 
     def _foreground_pid(self):
         try:
@@ -41,11 +43,6 @@ class LoginTask(BaseTask):
             return None
 
     def _ensure_target_window(self):
-        """Bring the intended Conquer PID forward and verify it owns focus.
-
-        This prevents credentials from being typed into another manually opened
-        Conquer page that happens to show the same login form.
-        """
         if not self.target_pid:
             return True
 
@@ -168,8 +165,6 @@ class LoginTask(BaseTask):
                 time.sleep(0.08)
 
             for char in text:
-                # If the user manually changes pages while typing, stop before
-                # sending another character to the wrong Conquer process.
                 if self.target_pid and self._foreground_pid() != self.target_pid:
                     raise RuntimeError(
                         f"Target focus lost while typing; expected PID {self.target_pid}"
@@ -201,7 +196,11 @@ class LoginTask(BaseTask):
         self.running = True
 
         if target_pid is not None:
-            self.target_pid = target_pid
+            self.set_target_pid(target_pid)
+        else:
+            shared_pid = TargetWindowContext.get_pid()
+            if shared_pid:
+                self.target_pid = shared_pid
 
         if username is None or password is None:
             username, password = self.load_credentials()
@@ -235,7 +234,6 @@ class LoginTask(BaseTask):
                     _
                 ) = positions
 
-                # Re-check immediately before touching the keyboard/mouse.
                 if not self._ensure_target_window():
                     time.sleep(0.20)
                     continue
@@ -277,7 +275,11 @@ class LoginTask(BaseTask):
             return False
 
         if target_pid is not None:
-            self.target_pid = target_pid
+            self.set_target_pid(target_pid)
+        else:
+            shared_pid = TargetWindowContext.get_pid()
+            if shared_pid:
+                self.target_pid = shared_pid
 
         start_time = time.time()
         positions = None

@@ -1,6 +1,6 @@
-from maintenance_launcher import MaintenanceAwareLauncher
+from control_launcher import ControlAwareLauncher
 
 
 if __name__ == "__main__":
-    app = MaintenanceAwareLauncher()
+    app = ControlAwareLauncher()
     app.run()

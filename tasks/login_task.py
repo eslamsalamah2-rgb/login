@@ -4,9 +4,12 @@ import json
 import cv2
 import numpy as np
 import pydirectinput
+import win32gui
+import win32process
 
 from PIL import ImageGrab
 from tasks.base_task import BaseTask
+from tasks.window_disconnect_detector import WindowDisconnectDetector
 
 
 class LoginTask(BaseTask):
@@ -21,6 +24,44 @@ class LoginTask(BaseTask):
 
         self.credentials_path = "credentials.json"
         self.threshold = 0.80
+        self.target_pid = None
+        self.window_helper = WindowDisconnectDetector()
+
+    def set_target_pid(self, pid):
+        self.target_pid = pid
+
+    def _foreground_pid(self):
+        try:
+            hwnd = win32gui.GetForegroundWindow()
+            if not hwnd:
+                return None
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            return pid
+        except Exception:
+            return None
+
+    def _ensure_target_window(self):
+        """Bring the intended Conquer PID forward and verify it owns focus.
+
+        This prevents credentials from being typed into another manually opened
+        Conquer page that happens to show the same login form.
+        """
+        if not self.target_pid:
+            return True
+
+        for _ in range(4):
+            self.window_helper.activate_main_window(self.target_pid)
+            time.sleep(0.12)
+
+            if self._foreground_pid() == self.target_pid:
+                return True
+
+            time.sleep(0.12)
+
+        print(
+            f"Login safety: could not focus target PID {self.target_pid}; typing blocked"
+        )
+        return False
 
     def load_credentials(self):
 
@@ -112,13 +153,6 @@ class LoginTask(BaseTask):
             time.sleep(0.02)
 
     def _type_exact(self, text, interval=0.04):
-        """Type ASCII credentials exactly as stored, independent of Caps Lock.
-
-        Lowercase letters are sent as their physical key with no Shift.
-        Uppercase letters are sent as Shift + the physical key.
-        Before typing, Caps Lock is forced OFF temporarily and restored to its
-        original state afterwards, so the user's keyboard state is preserved.
-        """
         text = str(text)
 
         caps_was_on = False
@@ -134,6 +168,13 @@ class LoginTask(BaseTask):
                 time.sleep(0.08)
 
             for char in text:
+                # If the user manually changes pages while typing, stop before
+                # sending another character to the wrong Conquer process.
+                if self.target_pid and self._foreground_pid() != self.target_pid:
+                    raise RuntimeError(
+                        f"Target focus lost while typing; expected PID {self.target_pid}"
+                    )
+
                 if "A" <= char <= "Z":
                     key = char.lower()
                     pydirectinput.keyDown("shift")
@@ -146,20 +187,21 @@ class LoginTask(BaseTask):
                     time.sleep(interval)
 
         finally:
-            # Never leave Shift held if typing is interrupted.
             try:
                 pydirectinput.keyUp("shift")
             except Exception:
                 pass
 
-            # Return Caps Lock to exactly the state the user had before typing.
             if caps_was_on:
                 pydirectinput.press("capslock")
                 time.sleep(0.08)
 
-    def start(self, username=None, password=None):
+    def start(self, username=None, password=None, target_pid=None):
 
         self.running = True
+
+        if target_pid is not None:
+            self.target_pid = target_pid
 
         if username is None or password is None:
             username, password = self.load_credentials()
@@ -178,6 +220,10 @@ class LoginTask(BaseTask):
                 self.running = False
                 return False
 
+            if not self._ensure_target_window():
+                time.sleep(0.25)
+                continue
+
             positions = self.find_login_fields()
 
             if positions:
@@ -189,20 +235,35 @@ class LoginTask(BaseTask):
                     _
                 ) = positions
 
-                pydirectinput.click(username_x, username_y)
-                time.sleep(0.20)
+                # Re-check immediately before touching the keyboard/mouse.
+                if not self._ensure_target_window():
+                    time.sleep(0.20)
+                    continue
 
-                self.clear_username_field()
-                time.sleep(0.10)
+                try:
+                    pydirectinput.click(username_x, username_y)
+                    time.sleep(0.20)
 
-                self._type_exact(username, interval=0.04)
-                time.sleep(0.20)
+                    self.clear_username_field()
+                    time.sleep(0.10)
 
-                pydirectinput.click(password_x, password_y)
-                time.sleep(0.15)
-                self._type_exact(password, interval=0.04)
+                    self._type_exact(username, interval=0.04)
+                    time.sleep(0.20)
 
-                print(f"Login credentials entered for {username}")
+                    if not self._ensure_target_window():
+                        continue
+
+                    pydirectinput.click(password_x, password_y)
+                    time.sleep(0.15)
+                    self._type_exact(password, interval=0.04)
+                except RuntimeError as error:
+                    print(f"Login safety: {error}")
+                    time.sleep(0.25)
+                    continue
+
+                print(
+                    f"Login credentials entered for {username} on target PID {self.target_pid}"
+                )
 
                 self.running = False
                 return True
@@ -211,16 +272,21 @@ class LoginTask(BaseTask):
 
         return False
 
-    def rewrite_password(self, password, timeout=5.0):
-        """After a password-error dialog is closed, rewrite password from zero."""
+    def rewrite_password(self, password, timeout=5.0, target_pid=None):
         if not password:
             return False
+
+        if target_pid is not None:
+            self.target_pid = target_pid
 
         start_time = time.time()
         positions = None
 
-        # The login fields may need a moment to become visible again after OK.
         while time.time() - start_time < timeout:
+            if not self._ensure_target_window():
+                time.sleep(0.20)
+                continue
+
             positions = self.find_login_fields()
             if positions:
                 break
@@ -228,6 +294,9 @@ class LoginTask(BaseTask):
 
         if not positions:
             print("Password retry: login fields not found after OK")
+            return False
+
+        if not self._ensure_target_window():
             return False
 
         (
@@ -238,21 +307,27 @@ class LoginTask(BaseTask):
             password_clear_x
         ) = positions
 
-        # Put the caret at the far-right end of the current password.
-        pydirectinput.click(password_clear_x, password_y)
-        time.sleep(0.20)
+        try:
+            pydirectinput.click(password_clear_x, password_y)
+            time.sleep(0.20)
 
-        # Erase the current password completely.
-        self.clear_password_field()
-        time.sleep(0.15)
+            self.clear_password_field()
+            time.sleep(0.15)
 
-        # Click the normal password typing area and type it again from scratch.
-        pydirectinput.click(password_x, password_y)
-        time.sleep(0.15)
-        self._type_exact(password, interval=0.04)
-        time.sleep(0.20)
+            if not self._ensure_target_window():
+                return False
 
-        print("Password rewritten from scratch with exact letter case")
+            pydirectinput.click(password_x, password_y)
+            time.sleep(0.15)
+            self._type_exact(password, interval=0.04)
+            time.sleep(0.20)
+        except RuntimeError as error:
+            print(f"Password retry safety: {error}")
+            return False
+
+        print(
+            f"Password rewritten on target PID {self.target_pid} with exact letter case"
+        )
         return True
 
     def stop(self):

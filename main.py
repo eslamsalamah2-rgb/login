@@ -1,6 +1,6 @@
-from clear_all_launcher import ClearAllAwareLauncher
+from selection_launcher import SelectionAwareLauncher
 
 
 if __name__ == "__main__":
-    app = ClearAllAwareLauncher()
+    app = SelectionAwareLauncher()
     app.run()

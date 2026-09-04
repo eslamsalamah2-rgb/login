@@ -45,12 +45,6 @@ class HealthAwareLauncher(ControlAwareLauncher):
         )
 
     def _refresh_baseline_from_live_page(self, row_index, session):
-        """Treat a timer-confirmed live page exactly like a newly opened page.
-
-        If the lightweight memory signature changed while the page is actually
-        alive, the new values become the fresh baseline instead of triggering
-        a needless login. The character name is also saved back to accounts.json.
-        """
         pid = session.get("pid")
         current_name, current_state = self._read_health(pid)
 
@@ -86,6 +80,98 @@ class HealthAwareLauncher(ControlAwareLauncher):
             or self.monitor_stop_event.is_set()
         )
 
+    def _reopen_missing_account(self, row_index, session):
+        """Open a brand-new page only for the account whose old PID disappeared."""
+        if not self._mark_recovery_started(row_index):
+            return
+
+        try:
+            if self.is_running or self._timer_stop_requested():
+                return
+
+            with self.recovery_lock:
+                if self.is_running or self._timer_stop_requested():
+                    return
+
+                username = session.get("username", "")
+                password = session.get("password", "")
+                path = self.path_entry.get().strip()
+
+                if not username or not password or not path:
+                    self.set_row_state(row_index, "error")
+                    self.set_status(
+                        f"الحساب {row_index + 1}: بيانات الحساب أو مسار play.exe غير مكتمل"
+                    )
+                    return
+
+                old_pid = session.get("pid")
+                print(
+                    f"Missing page detected - account {row_index + 1} - old PID {old_pid} - reopening"
+                )
+
+                self.set_row_state(row_index, "working")
+                self.set_status(
+                    f"الحساب {row_index + 1}: الصفحة اختفت - جاري فتح صفحة جديدة لنفس الحساب..."
+                )
+
+                result, page_name = self.run_account(
+                    path=path,
+                    username=username,
+                    password=password,
+                    account_number=row_index + 1,
+                    total_accounts=len(self.accounts_data),
+                )
+
+                if result == "SUCCESS":
+                    # run_account already registered the new PID/session. Leave
+                    # healthy_state empty so the next monitor pass learns the
+                    # fresh value from this newly created page.
+                    if 0 <= row_index < len(self.accounts_data):
+                        self.accounts_data[row_index]["character_name"] = page_name or ""
+                        self.account_manager.save_accounts(self.accounts_data)
+
+                    self.set_row_state(row_index, "success", page_name or "")
+                    self.set_status(
+                        f"الحساب {row_index + 1}: تم فتح صفحة جديدة وتسجيل الدخول بنجاح"
+                    )
+                    print(
+                        f"Missing page recovery success - account {row_index + 1} - Name: {page_name!r}"
+                    )
+                    return
+
+                if result == "SERVER_MAINTENANCE":
+                    ConquerMemoryReader.terminate_all_conquer()
+                    self.active_sessions.clear()
+                    self.current_account_index = 0
+                    self.reset_all_row_states()
+
+                    if self._wait_maintenance_retry() and not self._timer_stop_requested():
+                        self.is_running = True
+                        self.run_in_thread(self.process_accounts)
+                    return
+
+                if result == "CLIENT_UPDATE":
+                    ConquerMemoryReader.terminate_all_conquer()
+                    self.active_sessions.clear()
+                    self.current_account_index = 0
+                    self.reset_all_row_states()
+
+                    if self._wait_update_retry() and not self._timer_stop_requested():
+                        self.is_running = True
+                        self.run_in_thread(self.process_accounts)
+                    return
+
+                self.set_row_state(row_index, "error")
+                self.set_status(
+                    f"الحساب {row_index + 1}: فشل فتح الصفحة الجديدة - {result}"
+                )
+                print(
+                    f"Missing page recovery failed - account {row_index + 1} - {result}"
+                )
+
+        finally:
+            self._mark_recovery_finished(row_index)
+
     def _verify_with_timer_before_recovery(self, row_index, session):
         """Run the heavier screenshot heartbeat only for a suspicious page."""
         if self.is_running or self._timer_stop_requested():
@@ -93,7 +179,7 @@ class HealthAwareLauncher(ControlAwareLauncher):
 
         pid = session.get("pid")
         if not pid or pid not in ConquerMemoryReader.list_conquer_pids():
-            self._recover_logged_out_account(row_index, session)
+            self._reopen_missing_account(row_index, session)
             return
 
         self.set_status(
@@ -110,16 +196,12 @@ class HealthAwareLauncher(ControlAwareLauncher):
         )
 
         if result == TimerHeartbeatDetector.ACTIVE:
-            # This is the important rule: if the timer is alive, trust the page
-            # and learn whatever memory values it has now as the new baseline.
             self._refresh_baseline_from_live_page(row_index, session)
             return
 
         if self._timer_stop_requested():
             return
 
-        # STATIC or UNKNOWN: the visual check did not prove the page alive, so
-        # continue with the existing recovery/login workflow.
         self._recover_logged_out_account(row_index, session)
 
     def _recover_logged_out_account(self, row_index, session):
@@ -145,12 +227,12 @@ class HealthAwareLauncher(ControlAwareLauncher):
                     return
 
                 if pid not in ConquerMemoryReader.list_conquer_pids():
+                    # The page vanished after recovery had already started.
+                    # Release this recovery marker, then reopen on next pass.
                     self.set_row_state(row_index, "error")
-                    self.set_status(f"الحساب {row_index + 1}: صفحة اللعبة اتقفلت")
+                    self.set_status(f"الحساب {row_index + 1}: صفحة اللعبة اختفت")
                     return
 
-                # A native disconnect dialog is definitive; no timer test is
-                # needed in this path. Close it directly even in background.
                 if self.window_disconnect_detector.has_disconnect_dialog(pid):
                     print(
                         f"Background disconnect detected - account {row_index + 1} - PID {pid}"
@@ -161,8 +243,6 @@ class HealthAwareLauncher(ControlAwareLauncher):
                     self.window_disconnect_detector.press_ok(pid)
                     time.sleep(0.5)
 
-                # Login templates are screen-based, so only now bring the exact
-                # page forward. Healthy pages never get activated unnecessarily.
                 self.window_disconnect_detector.activate_main_window(pid)
                 time.sleep(0.3)
 
@@ -260,17 +340,31 @@ class HealthAwareLauncher(ControlAwareLauncher):
                 continue
 
             sessions = list(self.active_sessions.items())
+            live_pids = set(ConquerMemoryReader.list_conquer_pids())
 
             for row_index, session in sessions:
                 if self.monitor_pause_event.is_set() or self.monitor_stop_event.is_set():
                     break
 
                 pid = session.get("pid")
-                current_name, current_state = self._read_health(pid)
-                disconnected = False
 
-                if pid:
-                    disconnected = self.window_disconnect_detector.has_disconnect_dialog(pid)
+                # Missing process/page is definitive. Do not waste time on the
+                # visual heartbeat; open a fresh page for this account only.
+                if not pid or pid not in live_pids:
+                    print(
+                        f"Health monitor - account {row_index + 1} - PID {pid} - MISSING PAGE"
+                    )
+                    self.set_row_state(row_index, "error")
+
+                    if not self.is_running:
+                        self.run_in_thread(
+                            lambda idx=row_index, sess=dict(session):
+                                self._reopen_missing_account(idx, sess)
+                        )
+                    continue
+
+                current_name, current_state = self._read_health(pid)
+                disconnected = self.window_disconnect_detector.has_disconnect_dialog(pid)
 
                 if session.get("healthy_state") is None and current_state is not None:
                     session["healthy_state"] = current_state
@@ -306,15 +400,11 @@ class HealthAwareLauncher(ControlAwareLauncher):
                     continue
 
                 if disconnected:
-                    # Native disconnect is already a strong confirmation, so
-                    # skip screenshots and recover directly.
                     self.run_in_thread(
                         lambda idx=row_index, sess=dict(session):
                             self._recover_logged_out_account(idx, sess)
                     )
                 else:
-                    # Memory/name/state suspicion only: use the heavier visual
-                    # heartbeat before touching the account.
                     self.run_in_thread(
                         lambda idx=row_index, sess=dict(session):
                             self._verify_with_timer_before_recovery(idx, sess)

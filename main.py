@@ -1,6 +1,6 @@
-from control_launcher import ControlAwareLauncher
+from health_launcher import HealthAwareLauncher
 
 
 if __name__ == "__main__":
-    app = ControlAwareLauncher()
+    app = HealthAwareLauncher()
     app.run()

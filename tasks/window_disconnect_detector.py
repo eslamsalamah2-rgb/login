@@ -1,3 +1,4 @@
+import ctypes
 import time
 
 import win32con
@@ -118,8 +119,8 @@ class WindowDisconnectDetector:
         except Exception:
             return False
 
-    def activate_main_window(self, pid):
-        """Bring the main visible Conquer window for this PID to foreground."""
+    def _main_window_for_pid(self, pid):
+        """Return the largest visible non-dialog window owned by this PID."""
         candidates = []
 
         for hwnd in self._windows_for_pid(pid):
@@ -133,8 +134,10 @@ class WindowDisconnectDetector:
                 width = max(0, rect[2] - rect[0])
                 height = max(0, rect[3] - rect[1])
 
-                # Skip tiny/modal windows when selecting the main game page.
                 if class_name == "#32770":
+                    continue
+
+                if width < 200 or height < 150:
                     continue
 
                 candidates.append((width * height, hwnd, title))
@@ -142,16 +145,123 @@ class WindowDisconnectDetector:
                 continue
 
         if not candidates:
-            return False
+            return None
 
         candidates.sort(reverse=True)
-        _, hwnd, _ = candidates[0]
+        return candidates[0][1]
+
+    def activate_main_window(self, pid):
+        """Force the target Conquer page to the foreground automatically.
+
+        Windows can reject a plain SetForegroundWindow when our process is not
+        currently foreground. To make recovery autonomous we temporarily attach
+        our input thread to the foreground window thread, restore the game,
+        raise it, set it foreground/focus, then detach again.
+        """
+        hwnd = self._main_window_for_pid(pid)
+        if not hwnd:
+            return False
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        current_thread = kernel32.GetCurrentThreadId()
+        foreground_hwnd = user32.GetForegroundWindow()
+
+        foreground_thread = 0
+        if foreground_hwnd:
+            foreground_thread = user32.GetWindowThreadProcessId(
+                foreground_hwnd,
+                None
+            )
+
+        target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+
+        attached_foreground = False
+        attached_target = False
 
         try:
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            time.sleep(0.15)
-            win32gui.SetForegroundWindow(hwnd)
-            time.sleep(0.25)
-            return True
-        except Exception:
-            return False
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            else:
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+
+            time.sleep(0.10)
+
+            if foreground_thread and foreground_thread != current_thread:
+                attached_foreground = bool(
+                    user32.AttachThreadInput(
+                        current_thread,
+                        foreground_thread,
+                        True
+                    )
+                )
+
+            if target_thread and target_thread != current_thread:
+                attached_target = bool(
+                    user32.AttachThreadInput(
+                        current_thread,
+                        target_thread,
+                        True
+                    )
+                )
+
+            # Raise it without permanently changing always-on-top state.
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                win32con.SWP_NOMOVE
+                | win32con.SWP_NOSIZE
+                | win32con.SWP_SHOWWINDOW
+            )
+
+            try:
+                win32gui.BringWindowToTop(hwnd)
+            except Exception:
+                pass
+
+            try:
+                user32.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
+
+            try:
+                user32.SetFocus(hwnd)
+            except Exception:
+                pass
+
+            time.sleep(0.30)
+
+            success = user32.GetForegroundWindow() == hwnd
+
+            if success:
+                print(f"Activated Conquer window - PID {pid} - HWND {hwnd}")
+            else:
+                print(f"Could not fully foreground Conquer window - PID {pid} - HWND {hwnd}")
+
+            return bool(success)
+
+        finally:
+            if attached_target:
+                try:
+                    user32.AttachThreadInput(
+                        current_thread,
+                        target_thread,
+                        False
+                    )
+                except Exception:
+                    pass
+
+            if attached_foreground:
+                try:
+                    user32.AttachThreadInput(
+                        current_thread,
+                        foreground_thread,
+                        False
+                    )
+                except Exception:
+                    pass

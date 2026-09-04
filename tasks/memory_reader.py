@@ -3,15 +3,14 @@ import psutil
 import pymem
 import pymem.process
 
+from tasks.target_window_context import TargetWindowContext
+
 
 class ConquerMemoryReader:
 
     PROCESS_NAME = "conquer.exe"
 
-    # Character/page name shown after a successful login.
     NAME_OFFSET = 0x8E6184
-
-    # 4-byte account/page state supplied from the memory scanner.
     STATE_OFFSET = 0x8E52AE
 
     STATE_OPEN = 0
@@ -36,11 +35,6 @@ class ConquerMemoryReader:
 
     @classmethod
     def terminate_all_conquer(cls, wait_timeout=5.0):
-        """Close every running conquer.exe process.
-
-        Used only for the server-maintenance recovery flow.
-        Returns the number of processes that were targeted.
-        """
         processes = []
 
         for process in psutil.process_iter(["pid", "name"]):
@@ -53,6 +47,8 @@ class ConquerMemoryReader:
 
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
+
+        TargetWindowContext.clear()
 
         if not processes:
             return 0
@@ -79,8 +75,12 @@ class ConquerMemoryReader:
             new_pids = current_pids - set(previous_pids)
 
             if new_pids:
-                # Normally one new Conquer process is created per page.
-                return max(new_pids)
+                # The exact newly created page becomes the only page that the
+                # screen-based login tasks are allowed to touch.
+                pid = max(new_pids)
+                TargetWindowContext.set_pid(pid)
+                print(f"Target Conquer PID locked: {pid}")
+                return pid
 
             time.sleep(0.25)
 
@@ -130,7 +130,6 @@ class ConquerMemoryReader:
             return None
 
     def read_state(self):
-        """Read the 4-byte state at conquer.exe + 0x8E52AE."""
         try:
             module_base = self._module_base()
 
@@ -169,7 +168,6 @@ class ConquerMemoryReader:
         require_change=True,
         check_interval=10.0
     ):
-        """Keep checking the character-name address until a valid name appears."""
         previous_value = (previous_value or "").strip()
         check_number = 0
 

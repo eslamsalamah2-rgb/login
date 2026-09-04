@@ -13,6 +13,7 @@ class PostLoginMessageTask(BaseTask):
     DISCONNECTED = "DISCONNECTED"
     WRONG_PASSWORD = "WRONG_PASSWORD"
     INVALID_ACCOUNT_PASSWORD = "INVALID_ACCOUNT_PASSWORD"
+    SERVER_MAINTENANCE = "SERVER_MAINTENANCE"
 
     def __init__(self):
         super().__init__()
@@ -29,6 +30,10 @@ class PostLoginMessageTask(BaseTask):
             self.INVALID_ACCOUNT_PASSWORD: os.path.join(
                 "assets",
                 "invalid_account_password.png"
+            ),
+            self.SERVER_MAINTENANCE: os.path.join(
+                "assets",
+                "server_maintenance.png"
             )
         }
 

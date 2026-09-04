@@ -3,9 +3,12 @@ import time
 import cv2
 import numpy as np
 import pydirectinput
+import win32gui
+import win32process
 
 from PIL import ImageGrab
 from tasks.base_task import BaseTask
+from tasks.window_disconnect_detector import WindowDisconnectDetector
 
 
 class LoginButtonTask(BaseTask):
@@ -18,6 +21,37 @@ class LoginButtonTask(BaseTask):
             "login_button.png"
         )
         self.threshold = 0.82
+        self.target_pid = None
+        self.window_helper = WindowDisconnectDetector()
+
+    def set_target_pid(self, pid):
+        self.target_pid = pid
+
+    def _foreground_pid(self):
+        try:
+            hwnd = win32gui.GetForegroundWindow()
+            if not hwnd:
+                return None
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            return pid
+        except Exception:
+            return None
+
+    def _ensure_target_window(self):
+        if not self.target_pid:
+            return True
+
+        for _ in range(4):
+            self.window_helper.activate_main_window(self.target_pid)
+            time.sleep(0.12)
+            if self._foreground_pid() == self.target_pid:
+                return True
+            time.sleep(0.12)
+
+        print(
+            f"Login button safety: target PID {self.target_pid} is not foreground"
+        )
+        return False
 
     def find_button(self):
 
@@ -53,9 +87,13 @@ class LoginButtonTask(BaseTask):
 
         return x, y
 
-    def start(self):
+    def start(self, target_pid=None):
 
         self.running = True
+
+        if target_pid is not None:
+            self.target_pid = target_pid
+
         start_time = time.time()
 
         while self.running:
@@ -65,16 +103,31 @@ class LoginButtonTask(BaseTask):
                 self.running = False
                 return False
 
+            if not self._ensure_target_window():
+                time.sleep(0.25)
+                continue
+
             position = self.find_button()
 
             if position:
+                if not self._ensure_target_window():
+                    time.sleep(0.20)
+                    continue
+
                 x, y = position
 
                 pydirectinput.moveTo(x, y, duration=0.10)
                 time.sleep(0.10)
+
+                if self.target_pid and self._foreground_pid() != self.target_pid:
+                    print("Login button safety: focus changed before click; retrying")
+                    continue
+
                 pydirectinput.click()
 
-                print("Login button clicked")
+                print(
+                    f"Login button clicked on target PID {self.target_pid}"
+                )
 
                 self.running = False
                 return True

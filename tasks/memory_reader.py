@@ -35,6 +35,42 @@ class ConquerMemoryReader:
         return pids
 
     @classmethod
+    def terminate_all_conquer(cls, wait_timeout=5.0):
+        """Close every running conquer.exe process.
+
+        Used only for the server-maintenance recovery flow.
+        Returns the number of processes that were targeted.
+        """
+        processes = []
+
+        for process in psutil.process_iter(["pid", "name"]):
+            try:
+                name = process.info.get("name") or ""
+
+                if name.lower() == cls.PROCESS_NAME:
+                    processes.append(process)
+                    process.terminate()
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        if not processes:
+            return 0
+
+        _, alive = psutil.wait_procs(
+            processes,
+            timeout=wait_timeout
+        )
+
+        for process in alive:
+            try:
+                process.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        return len(processes)
+
+    @classmethod
     def wait_for_new_conquer_pid(cls, previous_pids, timeout=20.0):
         start_time = time.time()
 
@@ -133,16 +169,7 @@ class ConquerMemoryReader:
         require_change=True,
         check_interval=10.0
     ):
-        """Keep checking the character-name address until a valid name appears.
-
-        The login/server can take a long time, so this intentionally does not
-        fail after a short timeout. It checks conquer.exe+8E6184 once every
-        ``check_interval`` seconds (10 seconds by default) until the value is
-        non-empty and, when requested, different from the initial value.
-
-        ``timeout`` is kept only for compatibility with older gui.py calls and
-        is intentionally ignored.
-        """
+        """Keep checking the character-name address until a valid name appears."""
         previous_value = (previous_value or "").strip()
         check_number = 0
 

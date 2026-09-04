@@ -1,6 +1,6 @@
-from health_launcher import HealthAwareLauncher
+from clear_all_launcher import ClearAllAwareLauncher
 
 
 if __name__ == "__main__":
-    app = HealthAwareLauncher()
+    app = ClearAllAwareLauncher()
     app.run()

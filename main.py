@@ -1,6 +1,6 @@
-from selection_launcher import SelectionAwareLauncher
+from pluszero_controls_launcher import PlusZeroControlsLauncher
 
 
 if __name__ == "__main__":
-    app = SelectionAwareLauncher()
+    app = PlusZeroControlsLauncher()
     app.run()

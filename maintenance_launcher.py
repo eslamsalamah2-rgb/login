@@ -1,5 +1,8 @@
 import time
 
+import win32gui
+import win32process
+
 from gui import SimpleLauncher
 from tasks.memory_reader import ConquerMemoryReader
 from tasks.post_login_message_task import PostLoginMessageTask
@@ -10,6 +13,24 @@ class MaintenanceAwareLauncher(SimpleLauncher):
 
     MAINTENANCE_RETRY_SECONDS = 60
     UPDATE_RETRY_SECONDS = 5
+
+    @staticmethod
+    def _foreground_hwnd_for_pid(pid):
+        """Return the current foreground HWND only if it belongs to this PID.
+
+        No global window scan is performed.  The login flow has already focused
+        the exact Conquer page, so we simply capture that known window handle.
+        """
+        try:
+            hwnd = win32gui.GetForegroundWindow()
+            if not hwnd:
+                return None
+            _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
+            if int(window_pid) != int(pid):
+                return None
+            return int(hwnd)
+        except Exception:
+            return None
 
     def _maintenance_result(self, memory_reader):
         self.post_login_task.press_ok()
@@ -335,12 +356,15 @@ class MaintenanceAwareLauncher(SimpleLauncher):
         if not page_name:
             return "MEMORY_NAME_TIMEOUT", None
 
+        hwnd = self._foreground_hwnd_for_pid(conquer_pid)
+
         print(
-            f"Account {account_number} ready - PID {conquer_pid} - Name: {page_name}"
+            f"Account {account_number} ready - PID {conquer_pid} - HWND {hwnd} - Name: {page_name}"
         )
 
         self.active_sessions[account_number - 1] = {
             "pid": conquer_pid,
+            "hwnd": hwnd,
             "username": username,
             "password": password,
             "page_name": page_name,

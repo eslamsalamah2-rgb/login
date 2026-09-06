@@ -24,7 +24,10 @@ class LoginTask(BaseTask):
         )
 
         self.credentials_path = "credentials.json"
-        self.threshold = 0.80
+        # Current client rendering is consistently around 0.74 on the correct
+        # login page.  Exact target-PID focus protection is still enforced, so
+        # a slightly lower visual threshold is safe while allowing the action.
+        self.threshold = 0.70
         self.target_pid = None
         self.window_helper = WindowDisconnectDetector()
 
@@ -115,7 +118,10 @@ class LoginTask(BaseTask):
 
         _, max_value, _, max_location = cv2.minMaxLoc(result)
 
-        print(f"Login fields Match: {max_value:.3f}")
+        print(
+            f"Login fields Match: {max_value:.3f} "
+            f"(threshold {self.threshold:.2f})"
+        )
 
         if max_value < self.threshold:
             return None

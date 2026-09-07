@@ -38,6 +38,7 @@ class SelectionAwareLauncher(ClearAllAwareLauncher):
         self.clear_selection_button.pack(side="right", padx=6, pady=10)
 
     def create_account_row(self, account=None):
+        account = account or {}
         super().create_account_row(account)
 
         row = self.account_rows[-1]
@@ -48,7 +49,7 @@ class SelectionAwareLauncher(ClearAllAwareLauncher):
             info = widget.grid_info()
             widget.grid_configure(column=int(info.get("column", 0)) + 1)
 
-        selected_var = ctk.BooleanVar(value=True)
+        selected_var = ctk.BooleanVar(value=bool(account.get("selected", True)))
         selected_box = ctk.CTkCheckBox(
             row["frame"],
             text="",
@@ -62,11 +63,28 @@ class SelectionAwareLauncher(ClearAllAwareLauncher):
         row["selected_var"] = selected_var
         row["selected_box"] = selected_box
 
+    def collect_accounts_from_ui(self, include_empty=False):
+        accounts = super().collect_accounts_from_ui(include_empty=include_empty)
+
+        # super() returns only non-empty accounts unless include_empty=True.  In
+        # normal use account rows and returned accounts stay in the same order.
+        source_rows = self.account_rows if include_empty else [
+            row for row in self.account_rows
+            if row["username"].get().strip() and row["password"].get()
+        ]
+
+        for account, row in zip(accounts, source_rows):
+            var = row.get("selected_var")
+            account["selected"] = bool(var.get()) if var is not None else True
+
+        return accounts
+
     def select_all_accounts(self):
         for row in self.account_rows:
             var = row.get("selected_var")
             if var is not None:
                 var.set(True)
+        self.save_accounts_from_ui()
         self.set_status("تم تحديد كل الحسابات")
 
     def clear_account_selection(self):
@@ -74,6 +92,7 @@ class SelectionAwareLauncher(ClearAllAwareLauncher):
             var = row.get("selected_var")
             if var is not None:
                 var.set(False)
+        self.save_accounts_from_ui()
         self.set_status("تم إلغاء تحديد كل الحسابات")
 
     def _is_account_selected(self, index):
